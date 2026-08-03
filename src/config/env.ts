@@ -33,5 +33,14 @@ export const CONFIG = {
 
   // Worker Settings
   POLL_INTERVAL_MS: parseInt(process.env.POLL_INTERVAL_MS || '5000', 10),
-  HEADLESS: process.env.HEADLESS !== 'false'
+  HEADLESS: process.env.HEADLESS !== 'false',
+
+  // Gates the dashboard and all /api/* routes behind a login page. Leave unset
+  // only for local development; every deployed instance should set this,
+  // since approved corrections push real writes to a client's live listings.
+  INTERNAL_APP_PASSWORD: process.env.INTERNAL_APP_PASSWORD || '',
+  // Signs session cookies. If unset, a random secret is generated per process
+  // (sessions reset on every restart/deploy). Set a stable 32+ byte value in
+  // production.
+  SESSION_SECRET: process.env.SESSION_SECRET || ''
 };
