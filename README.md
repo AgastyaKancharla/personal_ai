@@ -7,6 +7,20 @@
 > repeatedly failed for exactly this reason. Use the Dockerfile below instead.
 
 **Recent fixes (this session):**
+- Added a login-gated session (`INTERNAL_APP_PASSWORD` / `SESSION_SECRET`) in
+  front of the dashboard and every `/api/*` route — previously anything,
+  including the endpoint that queues real writes to a client's live Google
+  Business Profile, was open to anyone who could reach the URL.
+- Implemented the Bing Web Search and Google Programmable Search Engine (CSE)
+  discovery sources (`bingSearch.ts`, `googleCse.ts`), which were wired into
+  the orchestrator but previously always returned `[]` regardless of config.
+- Added `supabase/audit_queue.sql` with the `audit_jobs`/`audit_results`
+  tables that `worker.ts`'s async queue mode (Option C) polls — they were
+  referenced in code but never defined in any schema file.
+- Added a client-facing, shareable, print/PDF-friendly report page at
+  `/report/:id` ("🔗 Copy Client Report Link" on a completed audit).
+
+**Previous session fixes:**
 - Fixed TypeScript strict-null build errors introduced when `SourceOfTruthNAP`
   fields became optional (`diffEngine.ts` + 3 directory adapters).
 - Removed a serious bug present in every directory adapter: on scrape
@@ -82,6 +96,23 @@ The screen shows one ranked list from the available sources, with duplicate URLs
 
 ---
 
+## 🔒 Access Control
+
+Every route (the dashboard and all `/api/*` endpoints) is gated behind a login
+page once `INTERNAL_APP_PASSWORD` is set — set it on every deployed instance.
+Approved corrections queue real writes to a client's live Google Business
+Profile, so this should never be left open on a public URL. Also set
+`SESSION_SECRET` to a stable value (`openssl rand -hex 32`); without it a
+random secret is generated per process and every restart signs everyone out.
+Both are optional for local development only.
+
+Client-facing audit reports at `/report/:id` are the one deliberate exception
+— they're meant to be shared with the client, so access control there is the
+unguessable report id, not the operator login. Use "🔗 Copy Client Report
+Link" on a completed audit to get a shareable, print/PDF-friendly report page.
+
+---
+
 ## 🚀 Deployment (Railway / Render / Fly.io / VPS / Docker)
 
 ### Option A: 1-Click Container Deployment (Web Dashboard + Scraper)
@@ -110,6 +141,9 @@ To run in background polling mode for Supabase queue jobs:
 ```bash
 npm run worker
 ```
+Run both `supabase/writeback.sql` and `supabase/audit_queue.sql` against your
+Supabase project first — the worker polls `audit_jobs`/`audit_results`
+(queue mode) and `write_jobs` (GBP writeback), and both tables must exist.
 
 ---
 

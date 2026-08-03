@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { CitationAuditAgent } from './index';
-import { SourceOfTruthNAP } from './types/nap';
+import { NAPAuditReport, SourceOfTruthNAP } from './types/nap';
 import { NAPReporter } from './reports/reporter';
 import { getAllDirectoryProviders } from './directories';
 import { getDirectoryCatalog } from './directories/catalog';
@@ -12,12 +12,47 @@ import { BusinessCluster, clusterCandidates } from './discovery/clustering';
 import { enrichCandidateCoordinates, enrichQueryCoordinates } from './discovery/geocoding';
 import { getSupabaseClient } from './db/supabase';
 import { encrypt } from './writeback/crypto';
+import { checkPassword, createSessionToken, parseCookies, SESSION_COOKIE, SESSION_TTL_MS, verifySessionToken } from './auth/session';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Every route below is an internal operator tool that can trigger scrapes and,
+// via /api/audit/approve, queue real writes to a client's live Google Business
+// Profile. Gate everything behind a login page once INTERNAL_APP_PASSWORD is
+// set. Shared, publicly-linkable client report pages (/report/:id) are the one
+// deliberate exception — their access control is the unguessable report id,
+// not the operator session, since the recipient is the client, not the agency.
+const PUBLIC_PATHS = new Set(['/login', '/api/health', '/health']);
+app.use((req: Request, res: Response, next) => {
+  if (!CONFIG.INTERNAL_APP_PASSWORD) return next();
+  if (PUBLIC_PATHS.has(req.path) || req.path.startsWith('/report/')) return next();
+  const cookies = parseCookies(req.headers.cookie);
+  if (verifySessionToken(cookies[SESSION_COOKIE])) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sign in required.' });
+  return res.redirect(`/login?next=${encodeURIComponent(req.originalUrl)}`);
+});
+
+app.get('/login', (req: Request, res: Response) => {
+  if (!CONFIG.INTERNAL_APP_PASSWORD) return res.redirect('/');
+  res.send(getLoginHTML({ error: req.query.error === '1', next: typeof req.query.next === 'string' ? req.query.next : '/' }));
+});
+
+app.post('/login', (req: Request, res: Response) => {
+  const { password, next: nextPath } = req.body;
+  const safeNext = typeof nextPath === 'string' && nextPath.startsWith('/') ? nextPath : '/';
+  if (!checkPassword(String(password || ''))) return res.redirect(`/login?error=1&next=${encodeURIComponent(safeNext)}`);
+  res.cookie(SESSION_COOKIE, createSessionToken(), { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: SESSION_TTL_MS });
+  res.redirect(safeNext);
+});
+
+app.post('/logout', (req: Request, res: Response) => {
+  res.clearCookie(SESSION_COOKIE);
+  res.redirect('/login');
+});
 
 interface DiscoveredBusiness {
   id: string;
@@ -1884,6 +1919,7 @@ const getDashboardHTML = () => `<!DOCTYPE html>
           <div class="action-row">
             <button class="btn-secondary" onclick="copyMarkdownReport()">📋 Copy Markdown Report</button>
             <button class="btn-secondary" onclick="downloadJSONReport()">💾 Export JSON</button>
+            <button class="btn-secondary" onclick="copyClientReportLink()" id="copyReportLinkBtn">🔗 Copy Client Report Link</button>
             <button class="btn-secondary" onclick="resetForm()" style="margin-left: auto;">🔄 Audit Another Business</button>
           </div>
         </div>
@@ -2236,6 +2272,16 @@ function copyMarkdownReport() {
   }
 }
 
+function copyClientReportLink() {
+  if (!lastReportData || !lastReportData.auditReportRef) {
+    alert('No shareable link yet — Supabase must be configured to save this report before it can be linked.');
+    return;
+  }
+  const url = window.location.origin + '/report/' + lastReportData.auditReportRef;
+  navigator.clipboard.writeText(url);
+  alert('Client report link copied: ' + url);
+}
+
 function downloadJSONReport() {
   if (lastReportData) {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(lastReportData, null, 2));
@@ -2251,6 +2297,183 @@ function downloadJSONReport() {
 
 </body>
 </html>`;
+
+const getLoginHTML = ({ error, next }: { error: boolean; next: string }) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in | Nexus Suite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg-gradient: radial-gradient(circle at 50% -10%, #1e1b4b 0%, #0f172a 60%, #090d16 100%); --card-bg: rgba(30, 41, 59, 0.75); --card-border: rgba(255, 255, 255, 0.1); --primary: #6366f1; --primary-hover: #4f46e5; --text-main: #f8fafc; --text-muted: #94a3b8; --inconsistent: #ef4444; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg-gradient); color: var(--text-main); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+    .card { width: 100%; max-width: 380px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 1rem; padding: 2.25rem; backdrop-filter: blur(16px); }
+    h1 { font-family: 'Outfit', sans-serif; font-size: 1.5rem; margin-bottom: 0.25rem; }
+    p.sub { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.4rem; }
+    input { width: 100%; padding: 0.75rem 0.9rem; border-radius: 0.6rem; border: 1px solid var(--card-border); background: rgba(15, 23, 42, 0.6); color: var(--text-main); font-size: 0.95rem; margin-bottom: 1.1rem; }
+    input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+    button { width: 100%; padding: 0.8rem; border: none; border-radius: 0.6rem; background: var(--primary); color: #fff; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
+    button:hover { background: var(--primary-hover); }
+    .error { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fecaca; padding: 0.6rem 0.8rem; border-radius: 0.5rem; font-size: 0.85rem; margin-bottom: 1.1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Nexus Suite</h1>
+    <p class="sub">Sign in to the audit &amp; operations command center.</p>
+    ${error ? '<div class="error">Incorrect password. Try again.</div>' : ''}
+    <form method="POST" action="/login">
+      <input type="hidden" name="next" value="${next.replace(/"/g, '&quot;')}">
+      <label for="password">Operator password</label>
+      <input type="password" id="password" name="password" autofocus required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>`;
+
+function scoreBand(score: number): { label: string; color: string } {
+  if (score >= 90) return { label: 'Excellent', color: '#10b981' };
+  if (score >= 70) return { label: 'Good', color: '#10b981' };
+  if (score >= 50) return { label: 'Needs Attention', color: '#f59e0b' };
+  return { label: 'Critical', color: '#ef4444' };
+}
+
+function statusMeta(status: string): { icon: string; color: string } {
+  switch (status) {
+    case 'CONSISTENT': return { icon: '✅', color: '#10b981' };
+    case 'DRIFT': return { icon: '⚠️', color: '#f59e0b' };
+    case 'INCONSISTENT':
+    case 'MISMATCH': return { icon: '❌', color: '#ef4444' };
+    default: return { icon: '🔍', color: '#6b7280' };
+  }
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] as string));
+}
+
+const getClientReportHTML = (report: NAPAuditReport, meta: { id: string; createdAt: string }) => {
+  const band = scoreBand(report.auditScore);
+  const driftCount = report.results.filter((r) => r.status === 'DRIFT').length;
+  const tiles = [
+    { label: 'Directories Audited', value: report.totalDirectoriesChecked, color: '#6366f1' },
+    { label: 'Consistent', value: report.consistentCount, color: '#10b981' },
+    { label: 'Minor Drift', value: driftCount, color: '#f59e0b' },
+    { label: 'Inconsistent', value: report.inconsistentCount, color: '#ef4444' },
+    { label: 'Missing', value: report.missingCount, color: '#6b7280' }
+  ];
+
+  const directoryRows = report.results.map((res) => {
+    const status = statusMeta(res.status);
+    const diffRows = res.diffs.length
+      ? res.diffs.map((diff) => {
+          const diffStatus = statusMeta(diff.matchStatus);
+          return `<tr><td>${escapeHtml(diff.fieldName)}</td><td>${escapeHtml(diff.sourceValue)}</td><td>${escapeHtml(diff.foundValue) || '<em>missing</em>'}</td><td><span class="pill" style="--pill-color:${diffStatus.color}">${diffStatus.icon} ${escapeHtml(diff.matchStatus)}</span></td></tr>`;
+        }).join('')
+      : `<tr><td colspan="4" class="muted">No active listing detected. Recommended for a Phase 2 submission.</td></tr>`;
+    return `
+    <section class="directory">
+      <h3><span class="pill" style="--pill-color:${status.color}">${status.icon} ${escapeHtml(res.status)}</span> ${escapeHtml(res.directoryName)}${res.listingUrl ? ` — <a href="${escapeHtml(res.listingUrl)}" target="_blank" rel="noopener">View listing</a>` : ''}</h3>
+      <table>
+        <thead><tr><th>Field</th><th>Source of truth</th><th>Found value</th><th>Match</th></tr></thead>
+        <tbody>${diffRows}</tbody>
+      </table>
+    </section>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(report.businessInfo.businessName)} | Citation & NAP Audit Report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #0f172a; --card-bg: rgba(30, 41, 59, 0.65); --card-border: rgba(255,255,255,0.1); --text-main: #f8fafc; --text-muted: #94a3b8; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 50% -10%, #1e1b4b 0%, #0f172a 60%, #090d16 100%); color: var(--text-main); padding: 2rem 1.25rem 4rem; }
+    .wrap { max-width: 880px; margin: 0 auto; }
+    header.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 1.75rem; flex-wrap: wrap; }
+    .brand { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.05rem; color: var(--text-muted); letter-spacing: 0.02em; }
+    h1 { font-family: 'Outfit', sans-serif; font-size: 1.75rem; margin-top: 0.2rem; }
+    .meta { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.35rem; }
+    button.print-btn { border: 1px solid var(--card-border); background: rgba(99,102,241,0.15); color: var(--text-main); padding: 0.6rem 1.1rem; border-radius: 0.6rem; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+    button.print-btn:hover { background: rgba(99,102,241,0.28); }
+    .hero { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 1rem; padding: 1.75rem; display: flex; align-items: center; gap: 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .hero .score { font-family: 'Outfit', sans-serif; font-size: 3rem; font-weight: 800; color: ${band.color}; line-height: 1; }
+    .hero .score-label { font-weight: 700; color: ${band.color}; font-size: 1rem; }
+    .hero .score-sub { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.15rem; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 2rem; }
+    .tile { background: var(--card-bg); border: 1px solid var(--card-border); border-left: 3px solid var(--tile-color); border-radius: 0.75rem; padding: 0.9rem 1rem; }
+    .tile .value { font-family: 'Outfit', sans-serif; font-size: 1.5rem; font-weight: 700; }
+    .tile .label { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.15rem; }
+    .directory { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 0.9rem; padding: 1.1rem 1.25rem; margin-bottom: 1rem; }
+    .directory h3 { font-family: 'Outfit', sans-serif; font-size: 1rem; margin-bottom: 0.75rem; font-weight: 600; }
+    .directory a { color: #a5b4fc; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--card-border); }
+    td { padding: 0.5rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
+    td.muted { color: var(--text-muted); font-style: italic; }
+    .pill { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: color-mix(in srgb, var(--pill-color) 18%, transparent); color: var(--pill-color); }
+    footer { text-align: center; color: var(--text-muted); font-size: 0.8rem; margin-top: 2.5rem; }
+    @media print {
+      body { background: #fff; color: #0f172a; padding: 0.5in; }
+      .brand, .meta, .score-sub, .directory a { color: #475569; }
+      .hero, .tile, .directory { background: #fff; border-color: #e2e8f0; }
+      .print-btn { display: none; }
+      table { font-size: 0.8rem; }
+      th { color: #475569; }
+      td { border-bottom-color: #e2e8f0; }
+      .directory { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <div class="brand">NEXUS SUITE — AGASTYAONE</div>
+        <h1>${escapeHtml(report.businessInfo.businessName)}</h1>
+        <div class="meta">${escapeHtml(report.businessInfo.address)}${report.businessInfo.city ? `, ${escapeHtml(report.businessInfo.city)}` : ''} · Generated ${escapeHtml(new Date(meta.createdAt).toLocaleString())}</div>
+      </div>
+      <button class="print-btn" onclick="window.print()">Download PDF</button>
+    </header>
+
+    <div class="hero">
+      <div class="score">${report.auditScore}%</div>
+      <div>
+        <div class="score-label">${band.label} Citation Health</div>
+        <div class="score-sub">Listing completeness: ${Math.round(report.completenessScore * 100)}%</div>
+      </div>
+    </div>
+
+    <div class="tiles">
+      ${tiles.map((tile) => `<div class="tile" style="--tile-color:${tile.color}"><div class="value">${tile.value}</div><div class="label">${escapeHtml(tile.label)}</div></div>`).join('')}
+    </div>
+
+    ${directoryRows}
+
+    <footer>Report ID ${escapeHtml(meta.id)} · This link is shareable but unguessable — do not post it publicly.</footer>
+  </div>
+</body>
+</html>`;
+};
+
+app.get('/report/:id', async (req: Request, res: Response) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return res.status(503).send('Reports require Supabase to be configured on this deployment.');
+  const { data, error } = await supabase.from('dashboard_audit_reports').select('id, report_json, created_at').eq('id', req.params.id).single();
+  if (error || !data) return res.status(404).send('Report not found. Check the link and try again.');
+  res.send(getClientReportHTML(data.report_json as NAPAuditReport, { id: data.id, createdAt: data.created_at }));
+});
 
 app.get('/audit', (req: Request, res: Response) => {
   res.send(getDashboardHTML());
