@@ -1,6 +1,7 @@
 import { BaseDirectoryProvider } from './baseDirectory';
 import { SourceOfTruthNAP, ScrapedListing } from '../types/nap';
 import { BrowserFactory } from '../utils/browser';
+import { extractDirectoryFields } from './scanExtraction';
 
 export class SulekhaDirectoryProvider extends BaseDirectoryProvider {
   readonly directoryId = 'sulekha';
@@ -21,11 +22,9 @@ export class SulekhaDirectoryProvider extends BaseDirectoryProvider {
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
 
-      const foundName = await page.locator('.biz-name, .listing-title, h3').first().innerText().catch(() => '');
-      const foundAddress = await page.locator('.address-info, .location').first().innerText().catch(() => '');
-      const foundPhone = await page.locator('.contact-number, .call-btn').first().innerText().catch(() => '');
+      const fields = await extractDirectoryFields(page, page.url(), { name: '.biz-name, .listing-title, h3', address: '.address-info, .location', phone: '.contact-number, .call-btn', category: '.category, .service-name', hours: '.working-hours, .hours', photos: 'img[src]', description: '.description, .about', attributes: '.services, .amenities' });
 
-      if (!foundName && !foundAddress) {
+      if (!fields.name && !fields.address) {
         return null;
       }
 
@@ -33,9 +32,7 @@ export class SulekhaDirectoryProvider extends BaseDirectoryProvider {
         directoryId: this.directoryId,
         directoryName: this.directoryName,
         listingUrl: searchUrl,
-        foundName: foundName.trim(),
-        foundAddress: foundAddress.trim(),
-        foundPhone: foundPhone.trim()
+        foundName: fields.name, foundAddress: fields.address, foundPhone: fields.phone, foundWebsite: fields.website, foundCategory: fields.category, completeness: fields.completeness, claimStatus: fields.claimStatus, as_of: new Date().toISOString()
       };
     } catch (err: any) {
       // Do NOT fall back to source-of-truth data here — that would report a

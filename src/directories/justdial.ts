@@ -1,6 +1,7 @@
 import { BaseDirectoryProvider } from './baseDirectory';
 import { SourceOfTruthNAP, ScrapedListing } from '../types/nap';
 import { BrowserFactory } from '../utils/browser';
+import { extractDirectoryFields } from './scanExtraction';
 
 export class JustdialDirectoryProvider extends BaseDirectoryProvider {
   readonly directoryId = 'justdial';
@@ -28,12 +29,10 @@ export class JustdialDirectoryProvider extends BaseDirectoryProvider {
       const addressSelector = '.cont_fl_addr, .address-info, .address';
       const phoneSelector = '.contact-info, .mobilesv, .call-now';
 
-      const foundName = await page.locator(titleSelector).first().innerText().catch(() => '');
-      const foundAddress = await page.locator(addressSelector).first().innerText().catch(() => '');
-      const foundPhone = await page.locator(phoneSelector).first().innerText().catch(() => '');
+      const fields = await extractDirectoryFields(page, page.url(), { name: titleSelector, address: addressSelector, phone: phoneSelector, category: '.category, .cat-name', hours: '.working-hours, .hours', photos: 'img[src]', description: '.description, .about', attributes: '.amenities, .attributes' });
       const listingUrl = page.url();
 
-      if (!foundName && !foundAddress) {
+      if (!fields.name && !fields.address) {
         return null;
       }
 
@@ -41,9 +40,7 @@ export class JustdialDirectoryProvider extends BaseDirectoryProvider {
         directoryId: this.directoryId,
         directoryName: this.directoryName,
         listingUrl,
-        foundName: foundName.trim(),
-        foundAddress: foundAddress.trim(),
-        foundPhone: foundPhone.trim()
+        foundName: fields.name, foundAddress: fields.address, foundPhone: fields.phone, foundWebsite: fields.website, foundCategory: fields.category, completeness: fields.completeness, claimStatus: fields.claimStatus, as_of: new Date().toISOString()
       };
     } catch (err: any) {
       // Do NOT fall back to source-of-truth data here — that would report a

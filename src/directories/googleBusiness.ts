@@ -1,6 +1,7 @@
 import { BaseDirectoryProvider } from './baseDirectory';
 import { SourceOfTruthNAP, ScrapedListing } from '../types/nap';
 import { BrowserFactory } from '../utils/browser';
+import { extractDirectoryFields } from './scanExtraction';
 
 export class GoogleBusinessDirectoryProvider extends BaseDirectoryProvider {
   readonly directoryId = 'google_business';
@@ -23,13 +24,10 @@ export class GoogleBusinessDirectoryProvider extends BaseDirectoryProvider {
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
 
-      const foundName = await page.locator('h1.DUwif, h1.fontHeadlineLarge, h1').first().innerText().catch(() => '');
-      const foundAddress = await page.locator('button[data-item-id="address"] .Io6fl3').first().innerText().catch(() => '');
-      const foundPhone = await page.locator('button[data-item-id^="phone"] .Io6fl3').first().innerText().catch(() => '');
-      const foundWebsite = await page.locator('a[data-item-id="authority"] .Io6fl3').first().innerText().catch(() => '');
+      const fields = await extractDirectoryFields(page, page.url(), { name: 'h1.DUwif, h1.fontHeadlineLarge, h1', address: 'button[data-item-id="address"] .Io6fl3', phone: 'button[data-item-id^="phone"] .Io6fl3', website: 'a[data-item-id="authority"] .Io6fl3', category: 'button[jsaction*="category"]', hours: '[data-item-id="oh"]', photos: 'button[aria-label*="Photos"]', description: '[data-item-id="summary"]', attributes: '[data-item-id*="attribute"]' });
       const listingUrl = page.url();
 
-      if (!foundName && !foundAddress) {
+      if (!fields.name && !fields.address) {
         return null;
       }
 
@@ -37,10 +35,7 @@ export class GoogleBusinessDirectoryProvider extends BaseDirectoryProvider {
         directoryId: this.directoryId,
         directoryName: this.directoryName,
         listingUrl,
-        foundName: foundName.trim(),
-        foundAddress: foundAddress.trim(),
-        foundPhone: foundPhone.trim(),
-        foundWebsite: foundWebsite.trim()
+        foundName: fields.name, foundAddress: fields.address, foundPhone: fields.phone, foundWebsite: fields.website, foundCategory: fields.category, completeness: fields.completeness, claimStatus: fields.claimStatus, as_of: new Date().toISOString()
       };
     } catch (err: any) {
       // Do NOT fall back to source-of-truth data here — that would report a

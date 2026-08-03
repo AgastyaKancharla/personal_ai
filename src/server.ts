@@ -2,6 +2,16 @@ import express, { Request, Response } from 'express';
 import { CitationAuditAgent } from './index';
 import { SourceOfTruthNAP } from './types/nap';
 import { NAPReporter } from './reports/reporter';
+import { getAllDirectoryProviders } from './directories';
+import { getDirectoryCatalog } from './directories/catalog';
+import { BrowserFactory } from './utils/browser';
+import { NAPNormalizer } from './engine/normalizer';
+import { CONFIG } from './config/env';
+import { discover } from './discovery/orchestrator';
+import { BusinessCluster, clusterCandidates } from './discovery/clustering';
+import { enrichCandidateCoordinates, enrichQueryCoordinates } from './discovery/geocoding';
+import { getSupabaseClient } from './db/supabase';
+import { encrypt } from './writeback/crypto';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,10 +19,446 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// API Endpoint to search/discover business profiles across directories
+interface DiscoveredBusiness {
+  id: string;
+  businessName: string;
+  address: string;
+  searchUrl: string;
+  directoryName: string;
+  domain: string;
+  confidence: number;
+  matchReason: string;
+  source?: 'places_api' | 'maps_page' | 'google_search' | 'openstreetmap';
+  phone?: string;
+  website?: string;
+  matchedSources?: string[];
+}
+
+interface DiscoveryResult {
+  candidates: DiscoveredBusiness[];
+  clusters?: BusinessCluster[];
+  diagnostics: string[];
+}
+
+interface OpenStreetMapPlace {
+  osm_type?: 'node' | 'way' | 'relation';
+  osm_id?: number;
+  display_name?: string;
+  lat?: string;
+  lon?: string;
+  namedetails?: { name?: string };
+  address?: Record<string, string>;
+  extratags?: Record<string, string>;
+  type?: string;
+}
+
+interface OverpassElement {
+  type: 'node' | 'way' | 'relation';
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+}
+
+let nextNominatimRequestAt = 0;
+const nominatimCache = new Map<string, { expiresAt: number; places: OpenStreetMapPlace[] }>();
+
+const CITY_ALIASES: Record<string, string[]> = {
+  bangalore: ['Bengaluru'],
+  bengaluru: ['Bangalore']
+};
+
+const COMMON_QUERY_TYPOS: Record<string, string> = {
+  elevatos: 'elevators',
+  elevetor: 'elevator',
+  resturant: 'restaurant',
+  clininc: 'clinic',
+  hosptial: 'hospital',
+  saloon: 'salon'
+};
+
+function cleanQueryText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function correctCommonTypos(value: string): string {
+  return value.replace(/\b[a-z]+\b/gi, (word) => COMMON_QUERY_TYPOS[word.toLowerCase()] || word);
+}
+
+function buildSearchQueries(input: Record<string, string | undefined>): string[] {
+  const name = cleanQueryText(input.businessName || '');
+  const city = cleanQueryText(input.city || '');
+  const address = cleanQueryText(input.address || '');
+  const category = cleanQueryText(input.category || '');
+  const identifier = cleanQueryText(input.phone || input.website || '');
+  const queries = new Set<string>();
+  const add = (...parts: string[]) => {
+    const query = cleanQueryText(parts.filter(Boolean).join(' '));
+    if (query) queries.add(query);
+  };
+
+  // Preserve the customer's wording, then try a small, transparent set of useful variations.
+  add(name, category, address, city);
+  add(name, city);
+  const correctedName = correctCommonTypos(name);
+  const correctedCategory = correctCommonTypos(category);
+  add(correctedName, correctedCategory, city);
+  if (city) {
+    const aliases = CITY_ALIASES[city.toLowerCase()] || [];
+    aliases.forEach((alias) => add(correctedName || name, correctedCategory || category, alias));
+  }
+  if (identifier) add(identifier);
+
+  return [...queries].slice(0, 5);
+}
+
+function legacyScoreCandidate(candidate: Pick<DiscoveredBusiness, 'businessName' | 'address'>, input: Record<string, string | undefined>): Pick<DiscoveredBusiness, 'confidence' | 'matchReason'> {
+  const requestedName = NAPNormalizer.normalizeBusinessName(input.businessName || '');
+  const candidateName = NAPNormalizer.normalizeBusinessName(candidate.businessName);
+  const nameScore = requestedName ? NAPNormalizer.calculateSimilarity(requestedName, candidateName) : 50;
+  const requestedCity = (input.city || '').toLowerCase();
+  const candidateAddress = candidate.address.toLowerCase();
+  const cityAlternatives = [requestedCity, ...(CITY_ALIASES[requestedCity] || []).map((city) => city.toLowerCase())].filter(Boolean);
+  const locationMatch = cityAlternatives.some((city) => candidateAddress.includes(city));
+  const requestedAddress = NAPNormalizer.normalizeAddress(input.address || '');
+  const addressScore = requestedAddress && candidate.address
+    ? NAPNormalizer.calculateSimilarity(requestedAddress, NAPNormalizer.normalizeAddress(candidate.address))
+    : 0;
+  const confidence = Math.min(99, Math.round(nameScore * 0.75 + (locationMatch ? 20 : 0) + Math.min(addressScore, 50) * 0.1));
+  const reasons = [];
+  if (nameScore >= 85) reasons.push('business name closely matches');
+  else if (nameScore >= 55) reasons.push('business name is similar');
+  if (locationMatch) reasons.push('location matches');
+  if (addressScore >= 65) reasons.push('address is similar');
+  return { confidence, matchReason: reasons.join(' · ') || 'possible match from search results' };
+}
+
+function unwrapGoogleResultUrl(href: string): string {
+  try {
+    const url = new URL(href, 'https://www.google.com');
+    return url.pathname === '/url' ? (url.searchParams.get('q') || href) : url.href;
+  } catch {
+    return href;
+  }
+}
+
+function isUsefulGoogleBusinessName(name: string): boolean {
+  return Boolean(name && !/^(google maps|google search|sign in|search)$/i.test(name.trim()));
+}
+
+function sameCanonicalBusiness(a: DiscoveredBusiness, b: DiscoveredBusiness, input: Record<string, string | undefined>): boolean {
+  const aPhone = NAPNormalizer.normalizePhone(a.phone || '');
+  const bPhone = NAPNormalizer.normalizePhone(b.phone || '');
+  if (aPhone && bPhone && aPhone === bPhone) return true;
+  const aWebsite = (a.website || '').replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '').toLowerCase();
+  const bWebsite = (b.website || '').replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '').toLowerCase();
+  if (aWebsite && bWebsite && aWebsite === bWebsite) return true;
+  const nameScore = NAPNormalizer.calculateSimilarity(NAPNormalizer.normalizeBusinessName(a.businessName), NAPNormalizer.normalizeBusinessName(b.businessName));
+  if (nameScore < 82) return false;
+  const city = (input.city || '').toLowerCase();
+  const cityNames = [city, ...(CITY_ALIASES[city] || []).map((alias) => alias.toLowerCase())].filter(Boolean);
+  return !cityNames.length || cityNames.some((name) => a.address.toLowerCase().includes(name) || b.address.toLowerCase().includes(name));
+}
+
+function legacyConsolidateCandidates(candidates: DiscoveredBusiness[], input: Record<string, string | undefined>): DiscoveredBusiness[] {
+  const consolidated: DiscoveredBusiness[] = [];
+  for (const candidate of candidates.sort((a, b) => b.confidence - a.confidence)) {
+    const existing = consolidated.find((profile) => sameCanonicalBusiness(profile, candidate, input));
+    if (!existing) {
+      consolidated.push({ ...candidate, matchedSources: [candidate.directoryName] });
+      continue;
+    }
+    existing.matchedSources = [...new Set([...(existing.matchedSources || [existing.directoryName]), candidate.directoryName])];
+    if (candidate.confidence > existing.confidence) {
+      existing.confidence = candidate.confidence;
+      existing.matchReason = candidate.matchReason;
+      existing.searchUrl = candidate.searchUrl;
+      existing.directoryName = candidate.directoryName;
+      existing.domain = candidate.domain;
+    }
+    if (candidate.address.length > existing.address.length) existing.address = candidate.address;
+    if (!existing.phone && candidate.phone) existing.phone = candidate.phone;
+    if (!existing.website && candidate.website) existing.website = candidate.website;
+  }
+  return consolidated.slice(0, 5);
+}
+
+function escapeOverpassRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|"]/g, '\\$&');
+}
+
+function openStreetMapUrl(place: OpenStreetMapPlace): string {
+  if (place.osm_type && place.osm_id) return `https://www.openstreetmap.org/${place.osm_type}/${place.osm_id}`;
+  if (place.lat && place.lon) return `https://www.openstreetmap.org/?mlat=${encodeURIComponent(place.lat)}&mlon=${encodeURIComponent(place.lon)}#map=18/${encodeURIComponent(place.lat)}/${encodeURIComponent(place.lon)}`;
+  return 'https://www.openstreetmap.org';
+}
+
+async function nominatimSearch(query: string): Promise<OpenStreetMapPlace[]> {
+  const cached = nominatimCache.get(query);
+  if (cached && cached.expiresAt > Date.now()) return cached.places;
+  const wait = Math.max(0, nextNominatimRequestAt - Date.now());
+  if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+  nextNominatimRequestAt = Date.now() + 1100; // Public Nominatim policy: max one request per second.
+  const params = new URLSearchParams({ q: query, format: 'jsonv2', limit: '10', addressdetails: '1', namedetails: '1', extratags: '1' });
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+    headers: { Accept: 'application/json', 'User-Agent': CONFIG.OSM_USER_AGENT },
+    signal: AbortSignal.timeout(12000)
+  });
+  if (!response.ok) throw new Error(`Nominatim HTTP ${response.status}`);
+  const places = await response.json() as OpenStreetMapPlace[];
+  nominatimCache.set(query, { places, expiresAt: Date.now() + 15 * 60 * 1000 });
+  return places;
+}
+
+async function discoverWithOpenStreetMap(input: Record<string, string | undefined>): Promise<DiscoveredBusiness[]> {
+  if (!CONFIG.ENABLE_OSM_DISCOVERY) return [];
+  const name = cleanQueryText(input.businessName || '');
+  const city = cleanQueryText(input.city || '');
+  const address = cleanQueryText(input.address || '');
+  if (!name && !address) return [];
+  const query = cleanQueryText([name, address, city].filter(Boolean).join(' '));
+  const places = await nominatimSearch(query);
+  const candidates = places
+    .filter((place) => place.osm_id && (place.namedetails?.name || place.display_name))
+    .slice(0, 10)
+    .map((place, index) => {
+      const businessName = place.namedetails?.name || place.display_name?.split(',')[0].trim() || name;
+      const addressText = place.display_name || Object.values(place.address || {}).join(', ');
+      const baseCandidate = { businessName, address: addressText };
+      return {
+        id: `osm-${place.osm_type || 'place'}-${place.osm_id || index}`,
+        ...baseCandidate,
+        searchUrl: openStreetMapUrl(place), directoryName: 'OpenStreetMap', domain: 'openstreetmap.org', source: 'openstreetmap' as const,
+        phone: place.extratags?.phone || place.extratags?.['contact:phone'] || '', website: place.extratags?.website || place.extratags?.['contact:website'] || '',
+        ...legacyScoreCandidate(baseCandidate, input)
+      };
+    });
+  if (candidates.length || !name || !city) return candidates;
+
+  // Nominatim is a text index. Overpass directly checks OSM objects tagged
+  // with the exact name inside the requested city, which catches some POIs
+  // that have not yet been ranked by Nominatim. Keep this to one small query.
+  const cities = [city, ...(CITY_ALIASES[city.toLowerCase()] || [])]
+    .map(escapeOverpassRegex).join('|');
+  const overpassQuery = `[out:json][timeout:12];area["boundary"="administrative"]["name"~"^(${cities})$",i]->.searchArea;(nwr["name"~"^${escapeOverpassRegex(name)}$",i](area.searchArea););out center 10;`;
+  const response = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': CONFIG.OSM_USER_AGENT },
+    body: new URLSearchParams({ data: overpassQuery }), signal: AbortSignal.timeout(20000)
+  });
+  if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
+  const payload = await response.json() as { elements?: OverpassElement[] };
+  return (payload.elements || []).slice(0, 10).map((element) => {
+    const tags = element.tags || {};
+    const latitude = element.lat ?? element.center?.lat;
+    const longitude = element.lon ?? element.center?.lon;
+    const addressText = [tags['addr:housenumber'], tags['addr:street'], tags['addr:suburb'], tags['addr:city'], tags['addr:postcode']].filter(Boolean).join(', ');
+    const baseCandidate = { businessName: tags.name || name, address: addressText || city };
+    return {
+      id: `osm-${element.type}-${element.id}`, ...baseCandidate,
+      searchUrl: latitude !== undefined && longitude !== undefined
+        ? `https://www.openstreetmap.org/${element.type}/${element.id}#map=18/${latitude}/${longitude}`
+        : `https://www.openstreetmap.org/${element.type}/${element.id}`,
+      directoryName: 'OpenStreetMap (Overpass)', domain: 'openstreetmap.org', source: 'openstreetmap' as const,
+      phone: tags.phone || tags['contact:phone'] || '', website: tags.website || tags['contact:website'] || '',
+      ...legacyScoreCandidate(baseCandidate, input)
+    };
+  });
+}
+
+async function discoverWithPlacesApi(searchQueries: string[], input: Record<string, string | undefined>): Promise<DiscoveredBusiness[]> {
+  if (!CONFIG.GOOGLE_MAPS_API_KEY) return [];
+  const candidates: DiscoveredBusiness[] = [];
+  const seenPlaceIds = new Set<string>();
+
+  for (const searchQuery of searchQueries) {
+    try {
+      const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': CONFIG.GOOGLE_MAPS_API_KEY,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.nationalPhoneNumber,places.websiteUri'
+        },
+        body: JSON.stringify({ textQuery: searchQuery, languageCode: 'en' }),
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json() as { places?: Array<{ id?: string; displayName?: { text?: string }; formattedAddress?: string; googleMapsUri?: string; nationalPhoneNumber?: string; websiteUri?: string }> };
+      for (const place of payload.places || []) {
+        const businessName = place.displayName?.text?.trim() || '';
+        if (!place.id || !businessName || seenPlaceIds.has(place.id)) continue;
+        const baseCandidate = { businessName, address: place.formattedAddress || '' };
+        candidates.push({
+          id: `place-${place.id}`,
+          ...baseCandidate,
+          searchUrl: place.googleMapsUri || `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(place.id)}`,
+          directoryName: 'Google Business Profile', domain: 'google.com/maps', source: 'places_api',
+          phone: place.nationalPhoneNumber || '', website: place.websiteUri || '',
+          ...legacyScoreCandidate(baseCandidate, input)
+        });
+        seenPlaceIds.add(place.id);
+      }
+    } catch (error: any) {
+      console.warn(`Places API search failed for "${searchQuery}": ${error.message || error}`);
+    }
+  }
+  return candidates;
+}
+
+async function dismissGoogleConsent(page: import('playwright-core').Page): Promise<void> {
+  const buttons = page.getByRole('button', { name: /accept all|i agree|accept/i });
+  if (await buttons.count()) await buttons.first().click({ timeout: 1500 }).catch(() => {});
+}
+
+async function discoverBusinesses(searchQueries: string[], input: Record<string, string | undefined>): Promise<DiscoveryResult> {
+  const rawCandidates = await discover({
+    name: input.businessName,
+    address: input.address,
+    city: input.city,
+    pin: input.pincode,
+    phone: input.phone,
+    category: input.category,
+    website: input.website,
+    ownerName: input.ownerName,
+    searchQueries
+  });
+  const query = await enrichQueryCoordinates({ name: input.businessName, address: input.address, city: input.city, pin: input.pincode, phone: input.phone, category: input.category, website: input.website, ownerName: input.ownerName, searchQueries });
+  const candidates = await Promise.all(rawCandidates.map(enrichCandidateCoordinates));
+  const clusters = clusterCandidates(candidates, query);
+  const diagnostics = rawCandidates.length
+    ? [`Discovery returned ${rawCandidates.length} candidate${rawCandidates.length === 1 ? '' : 's'} from configured sources.`]
+    : ['No candidate was exposed by the configured discovery sources. Add GOOGLE_MAPS_API_KEY for the supported and most reliable Google Business Profile search.'];
+  return { candidates: [], clusters, diagnostics };
+
+  const legacyDiagnostics: string[] = [];
+  const apiCandidates = await discoverWithPlacesApi(searchQueries, input);
+  if (apiCandidates.length) {
+    legacyDiagnostics.push(`Google Places API returned ${apiCandidates.length} match${apiCandidates.length === 1 ? '' : 'es'}.`);
+    return { candidates: legacyConsolidateCandidates(apiCandidates, input), diagnostics: legacyDiagnostics };
+  }
+  if (CONFIG.GOOGLE_MAPS_API_KEY) legacyDiagnostics.push('Google Places API returned no usable matches; trying browser fallbacks.');
+  else legacyDiagnostics.push('Google Places API is not configured; using browser fallbacks that Google may limit or redesign.');
+
+  let openStreetMapCandidates: DiscoveredBusiness[] = [];
+  try {
+    openStreetMapCandidates = await discoverWithOpenStreetMap(input);
+    if (openStreetMapCandidates.length) legacyDiagnostics.push(`OpenStreetMap returned ${openStreetMapCandidates.length} possible match${openStreetMapCandidates.length === 1 ? '' : 'es'}.`);
+  } catch (error: any) {
+    legacyDiagnostics.push(`OpenStreetMap search was unavailable: ${error.message || error}`);
+  }
+
+  let browser;
+  try {
+    ({ browser } = await BrowserFactory.getBrowser());
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
+    const candidates: DiscoveredBusiness[] = [...openStreetMapCandidates];
+    const seenUrls = new Set<string>(candidates.map((candidate) => candidate.searchUrl));
+    const page = await context.newPage();
+
+    for (const searchQuery of searchQueries) {
+      try {
+        await page.goto(`https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`, {
+          waitUntil: 'domcontentloaded', timeout: 15000
+        });
+        await dismissGoogleConsent(page);
+        await page.waitForSelector('h1.fontHeadlineLarge, h1.DUwif, a.hfpxzc, a[href*="/maps/place/"]', { timeout: 5000 }).catch(() => {});
+      } catch (error: any) {
+        legacyDiagnostics.push(`Google Maps could not load “${searchQuery}”: ${error.message || error}`);
+      }
+
+      // A precise Maps search often opens a single place page (as in the
+      // reported case), not a result list. The old implementation only read
+      // list links, so it returned zero for this successful result.
+      const directName = (await page.locator('h1.fontHeadlineLarge, h1.DUwif').first().innerText().catch(() => '')).trim();
+      const directAddress = (await page.locator('button[data-item-id="address"], [data-item-id="address"] .Io6fl3').first().innerText().catch(() => '')).trim();
+      const directPhone = (await page.locator('button[data-item-id^="phone"]').first().innerText().catch(() => '')).trim();
+      const directWebsite = await page.locator('a[data-item-id="authority"]').first().getAttribute('href').catch(() => '');
+      if (isUsefulGoogleBusinessName(directName)) {
+        const baseCandidate = { businessName: directName, address: directAddress };
+        const searchUrl = page.url();
+        candidates.push({
+          id: `maps-direct-${candidates.length + 1}`, ...baseCandidate, searchUrl,
+          directoryName: 'Google Maps', domain: 'google.com/maps', source: 'maps_page',
+          phone: directPhone, website: directWebsite || '',
+          ...legacyScoreCandidate(baseCandidate, input)
+        });
+        seenUrls.add(searchUrl);
+      }
+
+      const links = page.locator('a.hfpxzc, a[href*="/maps/place/"]');
+      const count = Math.min(await links.count(), 10);
+      for (let index = 0; index < count; index += 1) {
+        const link = links.nth(index);
+        const searchUrl = await link.getAttribute('href');
+        const label = (await link.getAttribute('aria-label')) || (await link.innerText().catch(() => ''));
+        const absoluteUrl = unwrapGoogleResultUrl(searchUrl || '');
+        if (!absoluteUrl || !label || seenUrls.has(absoluteUrl)) continue;
+        const cardText = await link.locator('xpath=ancestor::div[@role="article"][1]').innerText().catch(async () => link.locator('xpath=../..').innerText().catch(() => ''));
+        const lines = cardText.split('\n').map((line: string) => line.trim()).filter(Boolean);
+        const baseCandidate = { businessName: label.trim(), address: lines.slice(1, 4).join(', ') };
+        candidates.push({
+          id: `google-${candidates.length + 1}`,
+          ...baseCandidate,
+          searchUrl: absoluteUrl, directoryName: 'Google Maps', domain: 'google.com/maps', source: 'maps_page',
+          ...legacyScoreCandidate(baseCandidate, input)
+        });
+        seenUrls.add(absoluteUrl);
+      }
+
+      // Maps can return consent/challenge pages or change its card markup. A normal
+      // Google search is a useful fallback because it also finds a business's site
+      // and directory profiles (e.g. Justdial) that the customer can confirm.
+      try {
+        await page.goto(`https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`, {
+          waitUntil: 'domcontentloaded', timeout: 15000
+        });
+        await dismissGoogleConsent(page);
+        await page.waitForSelector('a:has(h3)', { timeout: 4000 }).catch(() => {});
+      } catch (error: any) {
+        legacyDiagnostics.push(`Google Search could not load “${searchQuery}”: ${error.message || error}`);
+        continue;
+      }
+      const resultLinks = page.locator('a:has(h3)');
+      const resultCount = Math.min(await resultLinks.count(), 10);
+      for (let index = 0; index < resultCount; index += 1) {
+        const link = resultLinks.nth(index);
+        const rawHref = await link.getAttribute('href');
+        const title = (await link.locator('h3').innerText().catch(() => '')).trim();
+        const searchUrl = rawHref ? unwrapGoogleResultUrl(rawHref) : '';
+        if (!searchUrl || !title || seenUrls.has(searchUrl) || !/^https?:\/\//.test(searchUrl)) continue;
+        const resultText = await link.locator('xpath=../../..').innerText().catch(() => '');
+        const address = resultText.replace(title, '').split('\n').map((line: string) => line.trim()).filter(Boolean).slice(0, 3).join(', ');
+        const domain = new URL(searchUrl).hostname.replace(/^www\./, '');
+        const baseCandidate = { businessName: title, address };
+        candidates.push({
+          id: `web-${candidates.length + 1}`,
+          ...baseCandidate,
+          searchUrl, directoryName: 'Google Search', domain, source: 'google_search',
+          ...legacyScoreCandidate(baseCandidate, input)
+        });
+        seenUrls.add(searchUrl);
+      }
+    }
+    if (!candidates.length) legacyDiagnostics.push('No candidate was exposed by the configured discovery sources. Add GOOGLE_MAPS_API_KEY for the supported and most reliable Google Business Profile search.');
+    return { candidates: legacyConsolidateCandidates(candidates, input), diagnostics: legacyDiagnostics };
+  } catch (error: any) {
+    // Discovery is optional pre-audit assistance. Do not turn a missing browser
+    // binary or a transient Google failure into a misleading 500 response.
+    legacyDiagnostics.push(`Browser discovery is unavailable: ${error.message || error}`);
+    legacyDiagnostics.push('Configure GOOGLE_MAPS_API_KEY to use the supported Google Places API path without a browser.');
+    return { candidates: legacyConsolidateCandidates(openStreetMapCandidates, input), diagnostics: legacyDiagnostics };
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+// Search the web for businesses before asking the user which one to audit.
 app.post(['/api/search', '/search'], async (req: Request, res: Response) => {
   try {
-    const { businessName, address, city, pincode, phone, category, website } = req.body;
+    const { businessName, address, city, pincode, phone, category, website, ownerName } = req.body;
 
     // Build search query from whatever the user provided
     const searchParts = [businessName, category, address, city].filter(Boolean);
@@ -20,90 +466,20 @@ app.post(['/api/search', '/search'], async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Please provide at least one detail to search (business name, address, phone, etc.).' });
     }
 
-    const searchQuery = searchParts.join(' ');
-    console.log(`\n🔍 Searching for business profiles: "${searchQuery}"...`);
-
-    // Define the directories we search across
-    const directories = [
-      {
-        id: 'google_business',
-        name: 'Google Business Profile',
-        icon: '🗺️',
-        searchUrl: `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`,
-        domain: 'google.com/maps'
-      },
-      {
-        id: 'justdial',
-        name: 'Justdial',
-        icon: '📞',
-        searchUrl: `https://www.justdial.com/${(city || 'india').toLowerCase()}/search?q=${encodeURIComponent(searchQuery)}`,
-        domain: 'justdial.com'
-      },
-      {
-        id: 'practo',
-        name: 'Practo',
-        icon: '🏥',
-        searchUrl: `https://www.practo.com/search/doctors?q=${encodeURIComponent(searchQuery)}&city=${encodeURIComponent(city || '')}`,
-        domain: 'practo.com'
-      },
-      {
-        id: 'sulekha',
-        name: 'Sulekha',
-        icon: '📋',
-        searchUrl: `https://www.sulekha.com/${(city || 'india').toLowerCase()}/search?q=${encodeURIComponent(searchQuery)}`,
-        domain: 'sulekha.com'
-      },
-      {
-        id: 'lybrate',
-        name: 'Lybrate',
-        icon: '💊',
-        searchUrl: `https://www.lybrate.com/search?q=${encodeURIComponent(searchQuery)}`,
-        domain: 'lybrate.com'
-      }
-    ];
-
-    // Build discovered profiles from user input + directory knowledge
-    const profiles = directories.map(dir => ({
-      directoryId: dir.id,
-      directoryName: dir.name,
-      icon: dir.icon,
-      searchUrl: dir.searchUrl,
-      domain: dir.domain,
-      // Pre-fill with whatever the user gave us
-      businessName: businessName || '',
-      address: address || '',
-      city: city || '',
-      pincode: pincode || '',
-      phone: phone || '',
-      category: category || '',
-      website: website || '',
-      status: 'discovered'
-    }));
-
-    // Also try a Google web search to find additional mentions
-    const googleWebSearch = {
-      directoryId: 'google_web',
-      directoryName: 'Google Web Results',
-      icon: '🌐',
-      searchUrl: `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' ' + (phone || ''))}`,
-      domain: 'google.com',
-      businessName: businessName || '',
-      address: address || '',
-      city: city || '',
-      pincode: pincode || '',
-      phone: phone || '',
-      category: category || '',
-      website: website || '',
-      status: 'discovered'
-    };
-
-    const allProfiles = [googleWebSearch, ...profiles];
+    const searchQuery = searchParts.join(' ') || phone || website;
+    const searchQueries = buildSearchQueries({ businessName, address, city, category, phone, website });
+    console.log(`\n🔍 Discovering businesses online with: ${searchQueries.join(' | ')}`);
+    const discovery = await discoverBusinesses(searchQueries, { businessName, address, city, pincode, category, phone, website, ownerName });
 
     return res.json({
       success: true,
       query: searchQuery,
-      totalFound: allProfiles.length,
-      profiles: allProfiles
+      searchedQueries: searchQueries,
+      totalFound: discovery.clusters?.length || 0,
+      clusters: discovery.clusters || [],
+      ...(discovery.clusters?.length ? {} : { message: 'no confident match, try adding phone or website' }),
+      diagnostics: discovery.diagnostics,
+      directoryPlan: getDirectoryCatalog(category || businessName || '')
     });
   } catch (error: any) {
     console.error('Search error:', error);
@@ -114,35 +490,154 @@ app.post(['/api/search', '/search'], async (req: Request, res: Response) => {
 // API Endpoint to execute NAP audit
 app.post(['/api/audit', '/audit'], async (req: Request, res: Response) => {
   try {
-    const { businessName, address, city, pincode, phone, category, website } = req.body;
+    const { businessName, address, city, pincode, phone, category, website, directoryIds, selectedClusters } = req.body;
+    const selectedClusterRecords = Array.isArray(selectedClusters)
+      ? selectedClusters.filter((cluster): cluster is BusinessCluster => Boolean(cluster && typeof cluster.id === 'string' && cluster.representative))
+      : [];
+    const primaryCluster = selectedClusterRecords.find((cluster) => cluster.status === 'PRIMARY_MATCH') || selectedClusterRecords[0];
+    const primary = primaryCluster?.representative;
+    const selectedRepresentatives = [primary, ...selectedClusterRecords.filter((cluster) => cluster !== primaryCluster).map((cluster) => cluster.representative)].filter(Boolean);
+    const mergedValue = (field: 'name' | 'address' | 'phone' | 'category' | 'website', fallback: string) =>
+      selectedRepresentatives.map((representative) => representative?.[field]).find((value): value is string => typeof value === 'string' && Boolean(value.trim())) || fallback;
 
-    if (!businessName && !address && !phone && !website) {
+    if (!businessName && !address && !phone && !website && !primary) {
       return res.status(400).json({ error: 'Please provide at least one business detail to run the audit.' });
     }
 
     const sourceNAP: SourceOfTruthNAP = {
-      businessName: businessName || 'Unknown Business',
-      address: address || '',
+      businessName: mergedValue('name', businessName || 'Unknown Business'),
+      address: mergedValue('address', address || ''),
       city: city || '',
       pincode: pincode || '',
-      phone: phone || '',
-      category: category || 'Business',
-      website: website || ''
+      phone: mergedValue('phone', phone || ''),
+      category: mergedValue('category', category || 'Business'),
+      website: mergedValue('website', website || '')
     };
 
     console.log(`\n🚀 Web API Request: Starting audit for "${businessName}"...`);
+    const validDirectoryIds = new Set(getAllDirectoryProviders().map((provider) => provider.directoryId));
+    const directoryPlan = getDirectoryCatalog(category || businessName || '');
+    const categoryDirectoryIds = directoryPlan
+      .filter((directory) => directory.auditStatus === 'supported' && validDirectoryIds.has(directory.id))
+      .map((directory) => directory.id);
+    const selectedDirectoryIds = Array.isArray(directoryIds)
+      ? directoryIds.filter((id): id is string => typeof id === 'string' && validDirectoryIds.has(id))
+      : categoryDirectoryIds;
+    if (Array.isArray(directoryIds) && (!selectedDirectoryIds || selectedDirectoryIds.length === 0)) {
+      return res.status(400).json({ error: 'Choose at least one supported directory to audit.' });
+    }
+
     const agent = new CitationAuditAgent();
-    const report = await agent.runAudit(sourceNAP);
+    const report = await agent.runAudit(sourceNAP, { directoryIds: selectedDirectoryIds });
+    const duplicateClusters = selectedClusterRecords.filter((cluster) => cluster.status === 'POSSIBLE_DUPLICATE_OR_OLD_LISTING');
+    const hasDistinctDuplicate = duplicateClusters.some((cluster) => {
+      const duplicate = cluster.representative;
+      return (duplicate.phone && NAPNormalizer.normalizePhone(duplicate.phone) !== NAPNormalizer.normalizePhone(sourceNAP.phone || '')) ||
+        (duplicate.address && NAPNormalizer.normalizeAddress(duplicate.address) !== NAPNormalizer.normalizeAddress(sourceNAP.address || ''));
+    });
+    if (hasDistinctDuplicate) {
+      report.results.forEach((result) => {
+        if (result.status === 'INCONSISTENT' || result.status === 'DRIFT') result.status = 'DUPLICATE_FOUND';
+      });
+    }
+    report.selectedClusters = selectedClusterRecords.map((cluster) => ({
+      id: cluster.id,
+      status: cluster.status,
+      businessName: cluster.representative.name
+    }));
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      const { data: client, error: clientError } = await supabase.from('clients').upsert({ name: sourceNAP.businessName, phone: sourceNAP.phone || null }, { onConflict: 'name,phone' }).select('id').single();
+      if (clientError) throw clientError;
+      const { data: saved, error: reportError } = await supabase.from('dashboard_audit_reports').insert({ client_id: client.id, report_json: report }).select('id').single();
+      if (reportError) throw reportError;
+      (report as any).auditReportRef = saved.id;
+    }
     const markdownReport = NAPReporter.generateMarkdownReport(report);
 
     return res.json({
       success: true,
       report,
-      markdownReport
+      markdownReport,
+      directoryPlan
     });
   } catch (error: any) {
     console.error('Audit execution error:', error);
     return res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
+app.post('/api/audit/approve', async (req: Request, res: Response) => {
+  try {
+    const { auditReportRef, directory, findings, consent } = req.body;
+    if (!auditReportRef || !directory || !Array.isArray(findings) || !consent) return res.status(400).json({ error: 'Consent, audit report reference, directory, and findings are required.' });
+    const supabase = getSupabaseClient(); if (!supabase) return res.status(503).json({ error: 'Supabase is not configured.' });
+    const operator = CONFIG.INTERNAL_OPERATOR_NAME;
+    const { error: consentError } = await supabase.from('write_consents').insert({ audit_report_ref: auditReportRef, directory, fields_to_change: findings, consented_by: operator });
+    if (consentError) throw consentError;
+    const approved = findings.map((finding: any) => ({ audit_report_ref: auditReportRef, directory, field: finding.field, current_value: finding.currentValue, proposed_value: finding.proposedValue, approved_by: operator }));
+    const { error: approvalError } = await supabase.from('approved_corrections').insert(approved); if (approvalError) throw approvalError;
+    const isGbp = directory === 'google_business' || directory === 'gbp';
+    if (isGbp) { const { error } = await supabase.from('write_jobs').insert(approved.map((finding: any) => ({ ...finding, status: 'PENDING' }))); if (error) throw error; }
+    return res.json({ success: true, automated: isGbp, message: isGbp ? 'Approved GBP corrections queued.' : 'Approved — manual action needed for this directory.' });
+  } catch (error: any) { return res.status(500).json({ error: error.message || 'Could not approve corrections.' }); }
+});
+
+app.get('/api/gbp/oauth/connect', (req: Request, res: Response) => {
+  const { clientId, locationName } = req.query;
+  if (!CONFIG.GOOGLE_OAUTH_CLIENT_ID || !CONFIG.GOOGLE_OAUTH_REDIRECT_URI || !clientId || !locationName) return res.status(400).send('Missing GBP OAuth configuration or client/location identity.');
+  const state = Buffer.from(JSON.stringify({ clientId, locationName })).toString('base64url');
+  const params = new URLSearchParams({ client_id: CONFIG.GOOGLE_OAUTH_CLIENT_ID, redirect_uri: CONFIG.GOOGLE_OAUTH_REDIRECT_URI, response_type: 'code', access_type: 'offline', prompt: 'consent', scope: 'https://www.googleapis.com/auth/business.manage', state });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get('/api/gbp/oauth/callback', async (req: Request, res: Response) => {
+  try {
+    const { code, state } = req.query; if (typeof code !== 'string' || typeof state !== 'string') throw new Error('Missing OAuth code or state.');
+    const identity = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) as { clientId: string; locationName: string };
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: CONFIG.GOOGLE_OAUTH_CLIENT_ID, client_secret: CONFIG.GOOGLE_OAUTH_CLIENT_SECRET, redirect_uri: CONFIG.GOOGLE_OAUTH_REDIRECT_URI, grant_type: 'authorization_code' }) });
+    if (!tokenResponse.ok) throw new Error(`Google OAuth token exchange failed: ${tokenResponse.status}`);
+    const rawTokens = await tokenResponse.json() as { access_token: string; refresh_token?: string; expires_in?: number };
+    const tokens = { ...rawTokens, expires_at: Date.now() + Math.max(0, (rawTokens.expires_in || 3600) - 60) * 1000 };
+    const supabase = getSupabaseClient(); if (!supabase) throw new Error('Supabase is not configured.');
+    const { error } = await supabase.from('gbp_connections').upsert({ client_id: identity.clientId, location_name: identity.locationName, encrypted_tokens: encrypt(tokens) }, { onConflict: 'client_id,location_name' }); if (error) throw error;
+    res.send('Google Business Profile connected. You may close this window.');
+  } catch (error: any) { res.status(500).send(`Google Business Profile connection failed: ${error.message || error}`); }
+});
+
+app.get('/api/audit/stream', async (req: Request, res: Response) => {
+  const payload = typeof req.query.payload === 'string' ? req.query.payload : '';
+  try {
+    const body = JSON.parse(payload);
+    const selectedClusterRecords = Array.isArray(body.selectedClusters) ? body.selectedClusters.filter((cluster: any) => cluster?.representative) : [];
+    const primaryCluster = selectedClusterRecords.find((cluster: any) => cluster.status === 'PRIMARY_MATCH') || selectedClusterRecords[0];
+    const primary = primaryCluster?.representative;
+    const sourceNAP: SourceOfTruthNAP = {
+      businessName: primary?.name || body.businessName || 'Unknown Business', address: primary?.address || body.address || '', city: body.city || '', pincode: body.pincode || '',
+      phone: primary?.phone || body.phone || '', category: primary?.category || body.category || 'Business', website: primary?.website || body.website || ''
+    };
+    const validDirectoryIds = new Set(getAllDirectoryProviders().map((provider) => provider.directoryId));
+    const directoryIds = Array.isArray(body.directoryIds) ? body.directoryIds.filter((id: unknown): id is string => typeof id === 'string' && validDirectoryIds.has(id)) : getDirectoryCatalog(sourceNAP.category || sourceNAP.businessName || '').filter((directory) => directory.auditStatus === 'supported' && validDirectoryIds.has(directory.id)).map((directory) => directory.id);
+    res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
+    res.flushHeaders();
+    const send = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+    const agent = new CitationAuditAgent();
+    const report = await agent.runAudit(sourceNAP, { directoryIds, onEvent: send });
+    report.selectedClusters = selectedClusterRecords.map((cluster: any) => ({ id: cluster.id, status: cluster.status, businessName: cluster.representative.name }));
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      const { data: client, error: clientError } = await supabase.from('clients').upsert({ name: sourceNAP.businessName, phone: sourceNAP.phone || null }, { onConflict: 'name,phone' }).select('id').single();
+      if (clientError) throw clientError;
+      const { data: saved, error: reportError } = await supabase.from('dashboard_audit_reports').insert({ client_id: client.id, report_json: report }).select('id').single();
+      if (reportError) throw reportError;
+      (report as any).auditReportRef = saved.id;
+    }
+    send({ type: 'complete', report, markdownReport: NAPReporter.generateMarkdownReport(report) });
+    res.end();
+  } catch (error: any) {
+    if (!res.headersSent) res.status(400).set({ 'Content-Type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ type: 'error', message: error.message || 'Audit stream failed.' })}\n\n`);
+    res.end();
   }
 });
 
@@ -854,6 +1349,26 @@ const getDashboardHTML = () => `<!DOCTYPE html>
       color: #fff;
     }
 
+    .search-variants {
+      color: #94a3b8;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      margin: -0.75rem 0 1.25rem;
+    }
+
+    .match-confidence {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      margin-top: 0.25rem;
+      padding: 0.25rem 0.55rem;
+      border-radius: 999px;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.13);
+      font-size: 0.74rem;
+      font-weight: 700;
+    }
+
     .btn-modify-search {
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--card-border);
@@ -1153,9 +1668,9 @@ const getDashboardHTML = () => `<!DOCTYPE html>
             <p class="module-desc">Scrape major Indian business directories (Justdial, Practo, Sulekha, Google) to detect NAP (Name, Address, Phone) drifts & inconsistent citations.</p>
           </div>
           <div class="module-footer">
-            <button class="btn-launch" onclick="openNapAudit()">
+            <a class="btn-launch" href="/audit">
               <span>🚀 Launch Local Citation & NAP Audit</span>
-            </button>
+            </a>
           </div>
         </div>
 
@@ -1250,19 +1765,19 @@ const getDashboardHTML = () => `<!DOCTYPE html>
         <div class="step-line" id="stepLine1"></div>
         <div class="step-group">
           <div class="step-dot" id="step2Dot">2</div>
-          <div class="step-label" id="step2Label">Select</div>
+          <div class="step-label" id="step2Label">Choose</div>
         </div>
         <div class="step-line" id="stepLine2"></div>
         <div class="step-group">
           <div class="step-dot" id="step3Dot">3</div>
-          <div class="step-label" id="step3Label">Audit</div>
+          <div class="step-label" id="step3Label">Scan</div>
         </div>
       </div>
 
       <!-- Step 1: Search Form Card -->
       <div class="card" id="formCard">
         <div class="card-title">🔍 Find a Business to Audit</div>
-        <p class="form-hint">Enter <strong>any</strong> detail you know about the business — name, phone, address, or website. All fields are optional. We'll search across the internet to find it.</p>
+        <p class="form-hint">Enter <strong>any</strong> detail you know about the business — name, phone, address, or website. All fields are optional. We'll try close spelling and city variations, then ask you to confirm the right business.</p>
         <form id="searchForm">
           <div class="grid-2">
             <div class="form-group">
@@ -1289,6 +1804,10 @@ const getDashboardHTML = () => `<!DOCTYPE html>
               <label>Phone Number</label>
               <input type="text" id="phone" placeholder="e.g. 08098765432">
             </div>
+            <div class="form-group">
+              <label>Owner / Doctor Name (optional)</label>
+              <input type="text" id="ownerName" placeholder="e.g. Dr. Priya Sharma">
+            </div>
             <div class="form-group" style="grid-column: 1 / -1;">
               <label>Website URL</label>
               <input type="url" id="website" placeholder="e.g. https://example.com">
@@ -1303,18 +1822,19 @@ const getDashboardHTML = () => `<!DOCTYPE html>
       <!-- Step 2: Search Results / Profile Selection -->
       <div id="searchResultsView">
         <div class="card">
-          <div class="card-title">🌐 Discovered Business Profiles</div>
+          <div class="card-title">🌐 Businesses Found Online</div>
           <div class="search-query-banner" id="searchQueryBanner">
             <span class="query-text">Searched for: <strong id="searchQueryText"></strong></span>
             <button class="btn-modify-search" onclick="backToSearch()">✏️ Modify Search</button>
           </div>
+          <p class="search-variants" id="searchedQueriesText"></p>
           <div class="select-all-row">
-            <span class="selected-count"><strong id="selectedCountText">0</strong> of <span id="totalProfilesText">0</span> profiles selected</span>
-            <button class="btn-select-all" id="btnSelectAll" onclick="toggleSelectAll()">Select All</button>
+            <span class="selected-count"><strong id="selectedCountText">0</strong> of <span id="totalProfilesText">0</span> clusters selected — select every current or old listing to review before auditing.</span>
           </div>
           <div class="profiles-grid" id="profilesGrid"></div>
+          <p class="search-variants" id="directoryPlanText"></p>
           <button class="btn-run-audit" id="btnRunAudit" onclick="runAuditOnSelected()" disabled>
-            ⚡ Run NAP Audit on Selected Profiles
+            ✓ Confirm Business & Scan Listings
           </button>
         </div>
       </div>
@@ -1325,6 +1845,7 @@ const getDashboardHTML = () => `<!DOCTYPE html>
         <h3 style="font-family: 'Outfit'; font-size: 1.4rem; margin-bottom: 0.5rem; color: #fff;" id="loadingTitle">Searching Business Profiles...</h3>
         <p style="color: var(--text-muted); font-size: 0.95rem;" id="loadingSubtext">Scanning directories across the internet to find your business.</p>
         <div class="loading-steps" id="loadingSteps"></div>
+        <div id="liveFeed" style="display:none; max-height:360px; overflow-y:auto; margin-top:1rem; text-align:left;"></div>
       </div>
 
       <!-- Results Dashboard -->
@@ -1375,9 +1896,15 @@ const getDashboardHTML = () => `<!DOCTYPE html>
 <script>
 let lastReportData = null;
 let lastMarkdownReport = '';
-let discoveredProfiles = [];
-let selectedProfileIds = new Set();
+let discoveredClusters = [];
+let selectedClusterIds = new Set();
 let currentSearchData = {};
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>'"]/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  })[char]);
+}
 
 function openNapAudit() {
   document.getElementById('mainDashboardView').style.display = 'none';
@@ -1386,6 +1913,8 @@ function openNapAudit() {
   setStep(1);
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
+
+if (window.location.pathname === '/audit') openNapAudit();
 
 function showMainDashboard() {
   document.getElementById('napAuditView').style.display = 'none';
@@ -1420,6 +1949,7 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
     city: document.getElementById('city').value.trim(),
     pincode: document.getElementById('pincode').value.trim(),
     phone: document.getElementById('phone').value.trim(),
+    ownerName: document.getElementById('ownerName').value.trim(),
     website: document.getElementById('website').value.trim()
   };
 
@@ -1433,7 +1963,7 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
   document.getElementById('formCard').style.display = 'none';
   document.getElementById('searchResultsView').style.display = 'none';
   document.getElementById('resultsContainer').style.display = 'none';
-  showLoading('Searching Business Profiles...', 'Scanning directories across the internet to find your business.');
+  showLoading('Searching Businesses...', 'Looking for matching businesses online.');
 
   try {
     const resp = await fetch('/api/search', {
@@ -1449,9 +1979,9 @@ document.getElementById('searchForm').addEventListener('submit', async (e) => {
       return;
     }
 
-    discoveredProfiles = result.profiles;
-    selectedProfileIds = new Set(discoveredProfiles.map(p => p.directoryId));
-    renderSearchResults(result.query, discoveredProfiles);
+    discoveredClusters = result.clusters || [];
+    selectedClusterIds = new Set();
+    renderSearchResults(result.query, result.searchedQueries || [], discoveredClusters, result.diagnostics || [], result.directoryPlan || [], result.message || '');
     setStep(2);
 
   } catch (err) {
@@ -1467,38 +1997,99 @@ function showLoading(title, subtext) {
   document.getElementById('loadingState').style.display = 'block';
 }
 
-function renderSearchResults(query, profiles) {
+function startLiveFeed() {
+  const feed = document.getElementById('liveFeed');
+  feed.style.display = 'block';
+  feed.innerHTML = '';
+}
+
+function appendFeedEvent(event) {
+  const feed = document.getElementById('liveFeed');
+  const row = document.createElement('div');
+  row.style.cssText = 'margin:0.6rem 0; padding:0.75rem; border:1px solid rgba(255,255,255,0.12); border-radius:10px; background:rgba(15,23,42,0.55);';
+  if (event.type === 'finding') {
+    const detail = event.detail || {};
+    row.dataset.finding = JSON.stringify({ directory: event.directory, field: detail.fieldName || detail.field, currentValue: detail.foundValue || '', proposedValue: detail.sourceValue || '' });
+    row.innerHTML = '<strong>Found an issue: ' + escapeHtml(event.message) + '</strong><br><span style="color:#94a3b8">Current: ' + escapeHtml(detail.foundValue || 'Not listed') + ' · Expected: ' + escapeHtml(detail.sourceValue || 'Not provided') + '</span><div style="margin-top:0.6rem"><button onclick="setFindingState(this, \'approved\')">Approve</button> <button onclick="setFindingState(this, \'skipped\')">Skip</button></div>';
+  } else {
+    row.textContent = event.message || 'Updating audit status...';
+  }
+  feed.appendChild(row);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+async function setFindingState(button, state) {
+  const card = button.closest('div[style*="margin:0.6rem"]');
+  if (state === 'approved') {
+    const reportRef = lastReportData && lastReportData.auditReportRef;
+    const finding = JSON.parse(card.dataset.finding || '{}');
+    if (!reportRef || !finding.field) { alert('This audit was not saved. Please run it again before approving corrections.'); return; }
+    const consent = window.confirm('I authorize AgastyaOne to apply this correction where supported.');
+    if (!consent) return;
+    const response = await fetch('/api/audit/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auditReportRef: reportRef, directory: finding.directory, findings: [{ field: finding.field, currentValue: finding.currentValue, proposedValue: finding.proposedValue }], consent: true }) });
+    const result = await response.json();
+    if (!response.ok) { alert(result.error || 'Could not approve correction.'); return; }
+    button.parentElement.textContent = result.message;
+  }
+  card.dataset.approval = state;
+  card.style.borderColor = state === 'approved' ? '#10b981' : '#64748b';
+  if (state !== 'approved') button.parentElement.textContent = 'Skipped.';
+}
+
+function renderSearchResults(query, searchedQueries, clusters, diagnostics, directoryPlan, message) {
   document.getElementById('loadingState').style.display = 'none';
   document.getElementById('searchResultsView').style.display = 'block';
   document.getElementById('searchQueryText').textContent = query || 'Business search';
-  document.getElementById('totalProfilesText').textContent = profiles.length;
+  const queryNote = document.getElementById('searchedQueriesText');
+  queryNote.textContent = searchedQueries.length
+    ? 'Search variations tried: ' + searchedQueries.map(query => '“' + query + '”').join(' · ')
+    : '';
+  const planNote = document.getElementById('directoryPlanText');
+  const supported = directoryPlan.filter(directory => directory.auditStatus === 'supported').map(directory => directory.name);
+  const planned = directoryPlan.filter(directory => directory.auditStatus === 'planned').map(directory => directory.name);
+  planNote.textContent = directoryPlan.length
+    ? 'Directory plan: audit now — ' + supported.join(', ') + (planned.length ? '. Recommended to claim/add next — ' + planned.join(', ') + '.' : '.')
+    : '';
+  document.getElementById('totalProfilesText').textContent = clusters.length;
 
   const grid = document.getElementById('profilesGrid');
   grid.innerHTML = '';
 
-  profiles.forEach(p => {
+  if (clusters.length === 0) {
+    const diagnosticHtml = diagnostics.length
+      ? '<p style="color:#fbbf24; line-height:1.55; margin-top:0.6rem;">' + escapeHtml(diagnostics.join(' ')) + '</p>'
+      : '';
+    grid.innerHTML = '<p style="color:var(--text-muted); line-height:1.55;">' + escapeHtml(message || 'No confident match, try adding phone or website.') + '</p>' + diagnosticHtml;
+    updateSelectionCount();
+    return;
+  }
+
+  clusters.forEach(cluster => {
+    const p = cluster.representative;
     const card = document.createElement('div');
-    card.className = 'profile-card selected';
-    card.dataset.id = p.directoryId;
-    card.onclick = () => toggleProfileSelection(p.directoryId);
+    card.className = 'profile-card' + (selectedClusterIds.has(cluster.id) ? ' selected' : '');
+    card.dataset.id = cluster.id;
+    card.onclick = () => selectCluster(cluster.id);
 
     const detailLines = [];
-    if (p.businessName) detailLines.push('<div class="profile-detail"><span class="detail-icon">🏢</span>' + p.businessName + '</div>');
-    if (p.address || p.city) detailLines.push('<div class="profile-detail"><span class="detail-icon">📍</span>' + [p.address, p.city, p.pincode].filter(Boolean).join(', ') + '</div>');
-    if (p.phone) detailLines.push('<div class="profile-detail"><span class="detail-icon">📞</span>' + p.phone + '</div>');
-    if (p.website) detailLines.push('<div class="profile-detail"><span class="detail-icon">🌐</span>' + p.website + '</div>');
-    if (detailLines.length === 0) detailLines.push('<div class="profile-detail" style="color:#64748b; font-style:italic;">Details will be discovered during audit</div>');
+    if (p.name) detailLines.push('<div class="profile-detail"><span class="detail-icon">🏢</span>' + escapeHtml(p.name) + '</div>');
+    if (p.address) detailLines.push('<div class="profile-detail"><span class="detail-icon">📍</span>' + escapeHtml(p.address) + '</div>');
+    if (p.phone) detailLines.push('<div class="profile-detail"><span class="detail-icon">📞</span>' + escapeHtml(p.phone) + '</div>');
+    if (p.website) detailLines.push('<div class="profile-detail"><span class="detail-icon">🌐</span>' + escapeHtml(p.website) + '</div>');
+    detailLines.push('<div class="profile-detail"><span class="detail-icon">🔗</span>Found on: ' + escapeHtml(cluster.sources.join(' · ')) + '</div>');
+    detailLines.push('<div class="match-confidence">' + escapeHtml(cluster.confidence >= 0.75 ? 'Strong match — ' : 'Possible match — ') + escapeHtml((cluster.reasons || ['details are similar']).join(', ')) + '</div>');
+    if (cluster.status === 'POSSIBLE_DUPLICATE_OR_OLD_LISTING') detailLines.push('<div class="match-confidence" style="color:#fbbf24;">Possible duplicate or old listing</div>');
 
     card.innerHTML = '<div class="profile-card-header">' +
       '<div class="profile-card-dir">' +
-        '<div class="profile-card-icon">' + (p.icon || '📋') + '</div>' +
-        '<div><div class="profile-card-dir-name">' + p.directoryName + '</div>' +
-        '<div class="profile-card-domain">' + p.domain + '</div></div>' +
+        '<div class="profile-card-icon">🗺️</div>' +
+        '<div><div class="profile-card-dir-name">' + escapeHtml(p.name || 'Unnamed business') + '</div>' +
+        '<div class="profile-card-domain">' + escapeHtml(cluster.members.length + ' source record(s)') + '</div></div>' +
       '</div>' +
-      '<div class="profile-select-check">✓</div>' +
+      '<input type="checkbox" class="profile-select-check" ' + (selectedClusterIds.has(cluster.id) ? 'checked' : '') + ' onclick="event.stopPropagation(); selectCluster(\'' + escapeHtml(cluster.id) + '\')">' +
     '</div>' +
     '<div class="profile-card-body">' + detailLines.join('') + '</div>' +
-    '<a href="' + p.searchUrl + '" target="_blank" class="profile-card-link" onclick="event.stopPropagation()">View on ' + p.directoryName + ' →</a>';
+    (p.searchUrl ? '<a href="' + encodeURI(p.searchUrl) + '" target="_blank" rel="noopener noreferrer" class="profile-card-link" onclick="event.stopPropagation()">View source →</a>' : '');
 
     grid.appendChild(card);
   });
@@ -1506,33 +2097,19 @@ function renderSearchResults(query, profiles) {
   updateSelectionCount();
 }
 
-function toggleProfileSelection(id) {
-  if (selectedProfileIds.has(id)) selectedProfileIds.delete(id);
-  else selectedProfileIds.add(id);
-
+function selectCluster(id) {
+  if (selectedClusterIds.has(id)) selectedClusterIds.delete(id);
+  else selectedClusterIds.add(id);
   document.querySelectorAll('.profile-card').forEach(card => {
-    card.classList.toggle('selected', selectedProfileIds.has(card.dataset.id));
-  });
-  updateSelectionCount();
-}
-
-function toggleSelectAll() {
-  if (selectedProfileIds.size === discoveredProfiles.length) {
-    selectedProfileIds.clear();
-  } else {
-    discoveredProfiles.forEach(p => selectedProfileIds.add(p.directoryId));
-  }
-  document.querySelectorAll('.profile-card').forEach(card => {
-    card.classList.toggle('selected', selectedProfileIds.has(card.dataset.id));
+    card.classList.toggle('selected', selectedClusterIds.has(card.dataset.id));
   });
   updateSelectionCount();
 }
 
 function updateSelectionCount() {
-  const count = selectedProfileIds.size;
+  const count = selectedClusterIds.size;
   document.getElementById('selectedCountText').textContent = count;
   document.getElementById('btnRunAudit').disabled = count === 0;
-  document.getElementById('btnSelectAll').textContent = count === discoveredProfiles.length ? 'Deselect All' : 'Select All';
 }
 
 function backToSearch() {
@@ -1546,49 +2123,55 @@ function backToSearch() {
 
 // Step 3: Run audit on selected profiles
 async function runAuditOnSelected() {
-  if (selectedProfileIds.size === 0) return;
+  const selectedClusters = discoveredClusters.filter((cluster) => selectedClusterIds.has(cluster.id));
+  if (!selectedClusters.length) return;
+  const primaryCluster = selectedClusters.find((cluster) => cluster.status === 'PRIMARY_MATCH') || selectedClusters[0];
+  const selectedBusiness = primaryCluster.representative;
 
   document.getElementById('searchResultsView').style.display = 'none';
-  showLoading('Running NAP Audit...', 'Comparing business data across ' + selectedProfileIds.size + ' selected directories.');
+  showLoading('Scanning Directory Listings...', 'Your confirmed business is now the source of truth. Checking Google, Justdial, Practo, Lybrate, and Sulekha.');
+  startLiveFeed();
   setStep(3);
 
   // Build source-of-truth from user-provided data
   const auditData = {
-    businessName: currentSearchData.businessName || '',
-    category: currentSearchData.category || '',
-    address: currentSearchData.address || '',
+    businessName: selectedBusiness.name || currentSearchData.businessName || '',
+    category: selectedBusiness.category || currentSearchData.category || '',
+    address: selectedBusiness.address || currentSearchData.address || '',
     city: currentSearchData.city || '',
     pincode: currentSearchData.pincode || '',
-    phone: currentSearchData.phone || '',
-    website: currentSearchData.website || ''
+    phone: selectedBusiness.phone || currentSearchData.phone || '',
+    website: selectedBusiness.website || currentSearchData.website || '',
+    selectedClusters
   };
 
-  try {
-    const resp = await fetch('/api/audit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(auditData)
-    });
-
-    const result = await resp.json();
-    if (!result.success) {
-      alert('Audit error: ' + (result.error || 'Unknown error'));
-      backToSearch();
+  const stream = new EventSource('/api/audit/stream?payload=' + encodeURIComponent(JSON.stringify(auditData)));
+  stream.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.type === 'complete') {
+      stream.close();
+      lastReportData = event.report;
+      lastMarkdownReport = event.markdownReport;
+      renderResults(event.report);
       return;
     }
-
-    lastReportData = result.report;
-    lastMarkdownReport = result.markdownReport;
-    renderResults(result.report);
-
-  } catch (err) {
-    alert('Failed to execute audit: ' + err.message);
-    backToSearch();
-  }
+    if (event.type === 'error') {
+      stream.close();
+      appendFeedEvent({ message: 'Something went wrong. Please retry the audit.' });
+      return;
+    }
+    appendFeedEvent(event);
+  };
+  stream.onerror = () => {
+    if (stream.readyState !== EventSource.CLOSED) {
+      stream.close();
+      appendFeedEvent({ message: 'Connection dropped. Please retry the audit.' });
+    }
+  };
 }
 
 function renderResults(report) {
-  document.getElementById('loadingState').style.display = 'none';
+  if (document.getElementById('liveFeed').style.display === 'none') document.getElementById('loadingState').style.display = 'none';
   document.getElementById('resultsContainer').style.display = 'block';
 
   const score = report.auditScore;
@@ -1615,17 +2198,17 @@ function renderResults(report) {
         const foundVal = d.foundValue !== undefined ? d.foundValue : (d.actualValue || '');
         const matchSymbol = d.matchStatus === 'EXACT' ? '✓' : (d.matchStatus === 'DRIFT' ? '⚠' : '✗');
         diffRows += '<tr>' +
-          '<td><strong>' + fieldNameStr.toUpperCase() + '</strong></td>' +
-          '<td>' + (sourceVal || '<em style="color:#64748b">None</em>') + '</td>' +
-          '<td>' + (foundVal || '<em style="color:#64748b">Not Listed</em>') + '</td>' +
-          '<td class="match-icon match-' + d.matchStatus + '">' + matchSymbol + ' ' + d.matchStatus + '</td>' +
+          '<td><strong>' + escapeHtml(fieldNameStr.toUpperCase()) + '</strong></td>' +
+          '<td>' + (sourceVal ? escapeHtml(sourceVal) : '<em style="color:#64748b">None</em>') + '</td>' +
+          '<td>' + (foundVal ? escapeHtml(foundVal) : '<em style="color:#64748b">Not Listed</em>') + '</td>' +
+          '<td class="match-icon match-' + escapeHtml(d.matchStatus) + '">' + matchSymbol + ' ' + escapeHtml(d.matchStatus) + '</td>' +
         '</tr>';
       });
     }
 
-    var errHtml = res.errorMessage ? ('<p style="color:#f87171; font-size:0.85rem;">Error: ' + res.errorMessage + '</p>') : '';
+    var errHtml = res.errorMessage ? ('<p style="color:#f87171; font-size:0.85rem;">Error: ' + escapeHtml(res.errorMessage) + '</p>') : '';
     var tableHtml = diffRows ? ('<table class="diff-table"><thead><tr><th>Field</th><th>Source of Truth</th><th>Listed Value</th><th>Match</th></tr></thead><tbody>' + diffRows + '</tbody></table>') : '<p style="color:var(--text-muted); font-size:0.85rem;">No profile listing found on this directory.</p>';
-    card.innerHTML = '<div class="dir-header"><span class="dir-name">' + res.directoryName + '</span><span class="status-badge badge-' + res.status + '">' + res.status + ' (' + res.overallConfidence + '% Match)</span></div>' + errHtml + tableHtml;
+    card.innerHTML = '<div class="dir-header"><span class="dir-name">' + escapeHtml(res.directoryName) + '</span><span class="status-badge badge-' + escapeHtml(res.status) + '">' + escapeHtml(res.status) + ' (' + escapeHtml(res.overallConfidence) + '% Match)</span></div>' + errHtml + tableHtml;
 
     listEl.appendChild(card);
   });
@@ -1636,8 +2219,8 @@ function resetAll() {
   document.getElementById('resultsContainer').style.display = 'none';
   document.getElementById('searchResultsView').style.display = 'none';
   document.getElementById('formCard').style.display = 'block';
-  discoveredProfiles = [];
-  selectedProfileIds.clear();
+  discoveredClusters = [];
+  selectedClusterIds = new Set();
   currentSearchData = {};
   setStep(1);
 }
@@ -1668,6 +2251,10 @@ function downloadJSONReport() {
 
 </body>
 </html>`;
+
+app.get('/audit', (req: Request, res: Response) => {
+  res.send(getDashboardHTML());
+});
 
 app.get('*', (req: Request, res: Response) => {
   res.send(getDashboardHTML());

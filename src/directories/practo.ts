@@ -1,6 +1,7 @@
 import { BaseDirectoryProvider } from './baseDirectory';
 import { SourceOfTruthNAP, ScrapedListing } from '../types/nap';
 import { BrowserFactory } from '../utils/browser';
+import { extractDirectoryFields } from './scanExtraction';
 
 export class PractoDirectoryProvider extends BaseDirectoryProvider {
   readonly directoryId = 'practo';
@@ -23,12 +24,10 @@ export class PractoDirectoryProvider extends BaseDirectoryProvider {
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
 
-      const foundName = await page.locator('.clinic-name, h2[data-qa-id="clinic_name"]').first().innerText().catch(() => '');
-      const foundAddress = await page.locator('.locality-address, [data-qa-id="clinic_locality"]').first().innerText().catch(() => '');
-      const foundPhone = await page.locator('.phone-number, [data-qa-id="clinic_phone"]').first().innerText().catch(() => '');
+      const fields = await extractDirectoryFields(page, page.url(), { name: '.clinic-name, h2[data-qa-id="clinic_name"]', address: '.locality-address, [data-qa-id="clinic_locality"]', phone: '.phone-number, [data-qa-id="clinic_phone"]', category: '.speciality, .clinic-speciality', hours: '.clinic-timings, .hours', photos: 'img[src]', description: '.clinic-description, .about', attributes: '.services, .amenities' });
       const listingUrl = page.url();
 
-      if (!foundName && !foundAddress) {
+      if (!fields.name && !fields.address) {
         return null;
       }
 
@@ -36,9 +35,7 @@ export class PractoDirectoryProvider extends BaseDirectoryProvider {
         directoryId: this.directoryId,
         directoryName: this.directoryName,
         listingUrl,
-        foundName: foundName.trim(),
-        foundAddress: foundAddress.trim(),
-        foundPhone: foundPhone.trim()
+        foundName: fields.name, foundAddress: fields.address, foundPhone: fields.phone, foundWebsite: fields.website, foundCategory: fields.category, completeness: fields.completeness, claimStatus: fields.claimStatus, as_of: new Date().toISOString()
       };
     } catch (err: any) {
       // Do NOT fall back to source-of-truth data here — that would report a

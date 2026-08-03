@@ -14,6 +14,7 @@ export class NAPReporter {
     md += `**Category:** ${businessInfo.category}\n`;
     md += `**Audit Timestamp:** ${report.auditTimestamp}\n`;
     md += `**Overall Citation Health Score:** **${auditScore}%**\n\n`;
+    md += `**Listing Completeness Score:** **${Math.round(report.completenessScore * 100)}%**\n\n`;
 
     md += `| Metric | Count |\n`;
     md += `| :--- | :--- |\n`;
@@ -49,7 +50,8 @@ export class NAPReporter {
     md += `--- \n\n`;
     md += `### 💡 Recommended Action Items\n`;
     md += `1. **Fix Inconsistent Phones & Addresses**: Update listings with '❌ MISMATCH' or '⚠️ DRIFT' to ensure 100% NAP consistency for Google Local Pack ranking.\n`;
-    md += `2. **Submit to Missing Directories**: Pre-fill registration forms on missing directories to expand citation authority.\n`;
+    md += `2. **Correct Category Mismatches**: Review every category mismatch promptly; primary category accuracy is a high-impact local ranking signal.\n`;
+    md += `3. **Submit to Missing Directories**: Pre-fill registration forms on missing directories to expand citation authority.\n`;
 
     return md;
   }

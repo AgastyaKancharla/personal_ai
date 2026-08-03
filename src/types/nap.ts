@@ -20,6 +20,9 @@ export interface ScrapedListing {
   foundPhone?: string;
   foundWebsite?: string;
   foundCategory?: string;
+  completeness?: Completeness;
+  claimStatus?: ClaimStatus;
+  as_of?: string;
   rating?: string;
   reviewCount?: string;
   isClaimed?: boolean;
@@ -27,14 +30,24 @@ export interface ScrapedListing {
 }
 
 export type MatchStatus = 'EXACT' | 'DRIFT' | 'MISMATCH' | 'MISSING';
+export type ClaimStatus = 'CLAIMED' | 'UNCLAIMED' | 'UNKNOWN';
+
+export interface Completeness {
+  hoursPresent?: boolean;
+  photosPresent?: boolean;
+  descriptionPresent?: boolean;
+  attributesPresent?: boolean;
+  score: number;
+}
 
 export interface FieldDiff {
-  fieldName: 'businessName' | 'address' | 'phone' | 'website';
+  fieldName: 'businessName' | 'address' | 'phone' | 'website' | 'category';
   sourceValue: string;
   foundValue: string;
   matchStatus: MatchStatus;
   similarityScore: number; // 0 to 100
   notes: string;
+  as_of: string;
 }
 
 export type DirectoryAuditStatus =
@@ -42,7 +55,9 @@ export type DirectoryAuditStatus =
   | 'DRIFT'
   | 'INCONSISTENT'
   | 'NOT_FOUND'
-  | 'ERROR';
+  | 'ERROR'
+  | 'DUPLICATE_FOUND'
+  | 'LOW_CONFIDENCE_SOURCE';
 
 export interface DirectoryAuditResult {
   directoryId: string;
@@ -52,6 +67,10 @@ export interface DirectoryAuditResult {
   diffs: FieldDiff[];
   overallConfidence: number;
   errorMessage?: string;
+  completeness?: Completeness;
+  claimStatus: ClaimStatus;
+  fromCache: boolean;
+  as_of: string;
 }
 
 export interface NAPAuditReport {
@@ -63,5 +82,7 @@ export interface NAPAuditReport {
   consistentCount: number;
   inconsistentCount: number;
   auditScore: number; // Percentage consistency score
+  completenessScore: number;
   results: DirectoryAuditResult[];
+  selectedClusters?: Array<{ id: string; status: 'PRIMARY_MATCH' | 'POSSIBLE_DUPLICATE_OR_OLD_LISTING'; businessName?: string }>;
 }

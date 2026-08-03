@@ -18,6 +18,7 @@ export class NAPDiffEngine {
     source: SourceOfTruthNAP,
     scraped: ScrapedListing | null
   ): DirectoryAuditResult {
+    const as_of = scraped?.as_of || new Date().toISOString();
     // If directory was searched but no listing was found
     if (!scraped || !scraped.listingUrl) {
       return {
@@ -26,7 +27,8 @@ export class NAPDiffEngine {
         status: 'NOT_FOUND',
         diffs: [],
         overallConfidence: 0,
-        errorMessage: 'Listing not found on target directory.'
+        errorMessage: 'Listing not found on target directory.',
+        claimStatus: 'UNKNOWN', fromCache: false, as_of
       };
     }
 
@@ -57,6 +59,7 @@ export class NAPDiffEngine {
       matchStatus: nameStatus,
       similarityScore: nameSimilarity,
       notes: nameNotes
+      ,as_of
     });
 
     // 2. Phone Number Diff
@@ -84,6 +87,7 @@ export class NAPDiffEngine {
       matchStatus: phoneStatus,
       similarityScore: phoneSimilarity,
       notes: phoneNotes
+      ,as_of
     });
 
     // 3. Address Diff
@@ -114,6 +118,7 @@ export class NAPDiffEngine {
       matchStatus: addrStatus,
       similarityScore: addrSimilarity,
       notes: addrNotes
+      ,as_of
     });
 
     // 4. Website Diff (Optional check)
@@ -130,8 +135,15 @@ export class NAPDiffEngine {
         matchStatus: webMatch ? 'EXACT' : (scraped.foundWebsite ? 'MISMATCH' : 'MISSING'),
         similarityScore: webScore,
         notes: webMatch ? 'Website URL matches.' : 'Website URL differs or missing.'
+        ,as_of
       });
     }
+
+    const sourceCategory = (source.category || '').trim();
+    const foundCategory = (scraped.foundCategory || '').trim();
+    const categorySimilarity = NAPNormalizer.calculateSimilarity(sourceCategory, foundCategory);
+    const categoryStatus: MatchStatus = !foundCategory ? 'MISSING' : categorySimilarity === 100 ? 'EXACT' : categorySimilarity >= 75 ? 'DRIFT' : 'MISMATCH';
+    diffs.push({ fieldName: 'category', sourceValue: sourceCategory, foundValue: foundCategory, matchStatus: categoryStatus, similarityScore: categorySimilarity, notes: categoryStatus === 'MISMATCH' ? 'Category mismatch detected; review this high-impact ranking signal.' : categoryStatus === 'MISSING' ? 'Category missing on directory listing.' : 'Category comparison completed.', as_of });
 
     // Determine Overall Status
     const isNameOk = nameStatus === 'EXACT' || nameStatus === 'DRIFT';
@@ -157,7 +169,11 @@ export class NAPDiffEngine {
       status: overallStatus,
       listingUrl: scraped.listingUrl,
       diffs,
-      overallConfidence
+      overallConfidence,
+      completeness: scraped.completeness,
+      claimStatus: scraped.claimStatus || 'UNKNOWN',
+      fromCache: false,
+      as_of
     };
   }
 }

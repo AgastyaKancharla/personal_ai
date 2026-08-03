@@ -56,6 +56,30 @@ A production-grade, 100% self-hosted Local Citation & NAP Audit web dashboard an
 4. **Field-Level Diffing**: Generates exact match confidence scores (`CONSISTENT`, `DRIFT`, `INCONSISTENT`, `NOT_FOUND`).
 5. **Supabase Integration (Optional)**: Can run as an async queue worker for background processing.
 
+### Reliable Google Business Profile discovery
+
+Google Maps' rendered HTML is not a stable integration surface: a precise query
+may open one place directly instead of a card list, and Google may show consent
+or challenge pages to an automated browser. Discovery now handles direct place
+pages, result cards, consent prompts, and normal Google web results, and returns
+an actionable diagnostic rather than silently claiming no business exists.
+
+For production, configure `GOOGLE_MAPS_API_KEY` and enable **Places API (New)**
+in Google Cloud. The service will use the official Text Search endpoint first
+and only use the browser fallbacks if it is unavailable or produces no match.
+Restrict the server-side key to the Places API and to your server IP; do not put
+it in frontend JavaScript. The Places API is the supported alternative to
+scraping Maps, which Google's Maps terms prohibit. See [Places Text Search](https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places/searchText) and [Places API policies](https://developers.google.com/maps/documentation/places/web-service/policies).
+
+Without a Google key, the confirmation search combines these sources:
+
+1. **OpenStreetMap / Nominatim** — free, no-key name/address lookup; it is cached and rate-limited to one request per second as required by its [usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+2. **OpenStreetMap / Overpass** — a small exact-name, city-bounded POI lookup when Nominatim has no result; public instances are community services and may reject overloaded queries.
+3. **Google Maps rendered page** — direct-place page and result-card fallback only; coverage is strong, but this is not a guaranteed integration surface.
+4. **Google web results** — finds the business website and public directory profiles, which the user can inspect and confirm.
+
+The screen shows one ranked list from the available sources, with duplicate URLs removed. OpenStreetMap coverage is community-maintained, so absence there does not mean that a business does not exist.
+
 ---
 
 ## 🚀 Deployment (Railway / Render / Fly.io / VPS / Docker)
@@ -70,12 +94,13 @@ Deploy directly using the provided `Dockerfile` to Railway, Render, Fly.io, or a
 ### Option B: Local Web Server Testing
 ```bash
 # 1. Install dependencies
-npm install
+npm ci
 
 # 2. Install Playwright Chromium binaries
 npx playwright install chromium
 
-# 3. Start Web Dashboard
+# 3. Compile and start the Web Dashboard
+npm run build
 npm start
 # Open http://localhost:3000 in your browser
 ```
