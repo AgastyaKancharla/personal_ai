@@ -6,7 +6,22 @@
 > deploy attempts on Vercel (`api/index.ts` + `vercel.json`, now removed)
 > repeatedly failed for exactly this reason. Use the Dockerfile below instead.
 
+**⚠️ Action required after pulling this commit:** `package.json` and the
+`Dockerfile` were bumped from Playwright `1.42.0` to `1.62.0` (see fix below),
+but `package-lock.json` was **not** regenerated here — there was no Node.js
+available to safely do it. Before deploying, run `npm install` locally (not
+`npm ci`) and commit the updated `package-lock.json`, or `npm ci` will fail
+in the Docker build because the lockfile won't match `package.json`.
+
 **Recent fixes (this session):**
+- Fixed every directory audit failing with "Chromium launch failed:
+  Executable doesn't exist... Looks like Playwright was just updated to
+  1.62.0. Please update docker image as well." — the deployed container's
+  installed `playwright-core` had drifted to `1.62.0` while the Dockerfile's
+  base image (`mcr.microsoft.com/playwright:v1.42.0-jammy`) still shipped
+  `1.42.0`'s Chromium build, so the browser could never launch and every
+  directory silently reported "not found." Pinned both to `1.62.0` so they
+  can't drift apart again — **requires the `npm install` step above.**
 - Added a login-gated session (`INTERNAL_APP_PASSWORD` / `SESSION_SECRET`) in
   front of the dashboard and every `/api/*` route — previously anything,
   including the endpoint that queues real writes to a client's live Google
