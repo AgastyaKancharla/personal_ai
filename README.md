@@ -7,6 +7,16 @@
 > repeatedly failed for exactly this reason. Use the Dockerfile below instead.
 
 **Recent fixes (this session):**
+- Fixed every directory audit failing with "Chromium launch failed:
+  Executable doesn't exist... Looks like Playwright was just updated to
+  1.62.0. Please update docker image as well." — the deployed container's
+  installed `playwright-core` had drifted to `1.62.0` while the Dockerfile's
+  base image (`mcr.microsoft.com/playwright:v1.42.0-jammy`) still shipped
+  `1.42.0`'s Chromium build, so the browser could never launch and every
+  directory silently reported "not found." Pinned both `package.json` and
+  the Dockerfile to `1.62.0` and regenerated `package-lock.json` so they
+  can't drift apart again. Verified with a clean `npm run build` and all
+  `test:*` scripts passing.
 - Added a login-gated session (`INTERNAL_APP_PASSWORD` / `SESSION_SECRET`) in
   front of the dashboard and every `/api/*` route — previously anything,
   including the endpoint that queues real writes to a client's live Google
