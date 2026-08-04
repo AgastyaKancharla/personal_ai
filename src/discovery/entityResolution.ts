@@ -58,6 +58,7 @@ function score(first: Comparable, second: Comparable, candidate: RawCandidate): 
   const phoneA = normalizePhone(first.phone);
   const phoneB = normalizePhone(second.phone);
   const phoneMatches = Boolean(phoneA && phoneB && phoneA === phoneB);
+  if (phoneA && phoneB && !phoneMatches) return { candidate, score: 0, reasons: ['phone numbers do not match'] };
   if (phoneMatches) contributions.push({ value: 0.85, reason: 'phone matches exactly' });
 
   const meters = haversineDistanceMeters(first, second);
@@ -72,7 +73,7 @@ function score(first: Comparable, second: Comparable, candidate: RawCandidate): 
   if (domainA && domainB && domainA === domainB) contributions.push({ value: 0.25, reason: 'website matches exactly' });
 
   const similarity = nameSimilarity(first.name, second.name);
-  if (similarity >= 0.55) contributions.push({ value: Math.min(0.2, similarity * 0.2), reason: similarity >= 0.82 ? 'business name closely matches' : 'business name is similar' });
+  if (similarity >= 0.55) contributions.push({ value: Math.min(0.5, similarity * 0.5), reason: similarity >= 0.82 ? 'business name closely matches' : 'business name is similar' });
 
   const ownerSimilarity = nameSimilarity(first.ownerName, second.ownerName);
   if (ownerSimilarity >= 0.75) contributions.push({ value: 0.15, reason: 'owner name matches' });

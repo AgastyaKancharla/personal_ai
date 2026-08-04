@@ -64,7 +64,7 @@ export function clusterCandidates(candidates: RawCandidate[], query: BusinessQue
     const match = scoreAgainstQuery(canonical, query);
     return { id: `cluster-${index + 1}`, representative: canonical, members, sources: [...new Set(members.map((member) => member.source))], confidence: match.score, reasons: match.reasons, status: 'PRIMARY_MATCH' as const };
   }).filter((cluster) => cluster.confidence >= MINIMUM_CONFIDENCE).sort((a, b) => b.confidence - a.confidence);
-  if (!clusters.length || clusters[0].confidence < PRIMARY_MATCH_THRESHOLD) return [];
+  if (!clusters.length) return [];
   const primary = clusters[0];
   return clusters.map((cluster, index) => ({ ...cluster, status: index > 0 && sharesStrongSignal(cluster.representative, primary.representative) ? 'POSSIBLE_DUPLICATE_OR_OLD_LISTING' : 'PRIMARY_MATCH' }));
 }
