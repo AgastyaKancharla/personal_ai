@@ -23,6 +23,14 @@ export class GoogleBusinessDirectoryProvider extends BaseDirectoryProvider {
       });
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
+      // Even a direct place-page hit renders its name first and the
+      // address/phone detail panel a beat later — extracting right after
+      // domcontentloaded can catch the name but miss those fields. Wait for
+      // the detail panel (or network to settle) before reading anything.
+      await Promise.race([
+        page.waitForSelector('button[data-item-id="address"], button[data-item-id^="phone"]', { timeout: 10000 }).catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+      ]);
 
       const fields = await extractDirectoryFields(page, page.url(), { name: 'h1.DUwif, h1.fontHeadlineLarge, h1', address: 'button[data-item-id="address"] .Io6fl3', phone: 'button[data-item-id^="phone"] .Io6fl3', website: 'a[data-item-id="authority"] .Io6fl3', category: 'button[jsaction*="category"]', hours: '[data-item-id="oh"]', photos: 'button[aria-label*="Photos"]', description: '[data-item-id="summary"]', attributes: '[data-item-id*="attribute"]' });
       const listingUrl = page.url();
