@@ -2046,7 +2046,7 @@ function appendFeedEvent(event) {
   if (event.type === 'finding') {
     const detail = event.detail || {};
     row.dataset.finding = JSON.stringify({ directory: event.directory, field: detail.fieldName || detail.field, currentValue: detail.foundValue || '', proposedValue: detail.sourceValue || '' });
-    row.innerHTML = '<strong>Found an issue: ' + escapeHtml(event.message) + '</strong><br><span style="color:#94a3b8">Current: ' + escapeHtml(detail.foundValue || 'Not listed') + ' · Expected: ' + escapeHtml(detail.sourceValue || 'Not provided') + '</span><div style="margin-top:0.6rem"><button onclick="setFindingState(this, \'approved\')">Approve</button> <button onclick="setFindingState(this, \'skipped\')">Skip</button></div>';
+    row.innerHTML = '<strong>Found an issue: ' + escapeHtml(event.message) + '</strong><br><span style="color:#94a3b8">Current: ' + escapeHtml(detail.foundValue || 'Not listed') + ' · Expected: ' + escapeHtml(detail.sourceValue || 'Not provided') + '</span><div style="margin-top:0.6rem"><button onclick="setFindingState(this, \\'approved\\')">Approve</button> <button onclick="setFindingState(this, \\'skipped\\')">Skip</button></div>';
   } else {
     row.textContent = event.message || 'Updating audit status...';
   }
@@ -2122,7 +2122,7 @@ function renderSearchResults(query, searchedQueries, clusters, diagnostics, dire
         '<div><div class="profile-card-dir-name">' + escapeHtml(p.name || 'Unnamed business') + '</div>' +
         '<div class="profile-card-domain">' + escapeHtml(cluster.members.length + ' source record(s)') + '</div></div>' +
       '</div>' +
-      '<input type="checkbox" class="profile-select-check" ' + (selectedClusterIds.has(cluster.id) ? 'checked' : '') + ' onclick="event.stopPropagation(); selectCluster(\'' + escapeHtml(cluster.id) + '\')">' +
+      '<input type="checkbox" class="profile-select-check" ' + (selectedClusterIds.has(cluster.id) ? 'checked' : '') + ' onclick="event.stopPropagation(); selectCluster(\\'' + escapeHtml(cluster.id) + '\\')">' +
     '</div>' +
     '<div class="profile-card-body">' + detailLines.join('') + '</div>' +
     (p.searchUrl ? '<a href="' + encodeURI(p.searchUrl) + '" target="_blank" rel="noopener noreferrer" class="profile-card-link" onclick="event.stopPropagation()">View source →</a>' : '');
