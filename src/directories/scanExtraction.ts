@@ -25,8 +25,29 @@ export interface ExtractedDirectoryFields {
   claimStatus: ClaimStatus;
 }
 
+// Pages with no real match often still render a name-shaped string: a
+// generic app-shell heading ("Google Maps"), a literal "null" from an
+// unfilled JSON-LD template, or the site's own "no results" copy. None of
+// these are a business name — treat them as absent so the caller correctly
+// falls through to NOT_FOUND instead of reporting a fake "found" listing.
+const IMPLAUSIBLE_NAME_PATTERNS = [
+  /^(null|undefined|n\/a)$/i,
+  /^google (maps?|search)$/i,
+  /^(sign in|search)$/i,
+  /couldn'?t find|no results?( found)?|not found|no matches?|no (clinics?|listings?|businesses?) found/i
+];
+
+function isPlausibleName(value: string | undefined | null): value is string {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 200) return false;
+  return !IMPLAUSIBLE_NAME_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 export function mergeStructuredFields(structured: Partial<RawCandidate> | null, fallback: Pick<ExtractedDirectoryFields, 'name' | 'address' | 'phone' | 'website' | 'category'>): Pick<ExtractedDirectoryFields, 'name' | 'address' | 'phone' | 'website' | 'category'> {
-  return { name: structured?.name || fallback.name, address: structured?.address || fallback.address, phone: structured?.phone || fallback.phone, website: structured?.website || fallback.website, category: structured?.category || fallback.category };
+  const structuredName = isPlausibleName(structured?.name) ? structured?.name : undefined;
+  const fallbackName = isPlausibleName(fallback.name) ? fallback.name : '';
+  return { name: structuredName || fallbackName, address: structured?.address || fallback.address, phone: structured?.phone || fallback.phone, website: structured?.website || fallback.website, category: structured?.category || fallback.category };
 }
 
 async function firstText(page: Page, selector?: string): Promise<string> {
