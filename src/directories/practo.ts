@@ -3,6 +3,20 @@ import { SourceOfTruthNAP, ScrapedListing } from '../types/nap';
 import { BrowserFactory } from '../utils/browser';
 import { extractDirectoryFields } from './scanExtraction';
 
+const PRACTO_CITY_SLUGS: Record<string, string> = {
+  bengaluru: 'bangalore', bangalore: 'bangalore',
+  mumbai: 'mumbai', bombay: 'mumbai',
+  delhi: 'delhi', 'new delhi': 'delhi',
+  chennai: 'chennai', madras: 'chennai',
+  kolkata: 'kolkata', calcutta: 'kolkata',
+  hyderabad: 'hyderabad', pune: 'pune', ahmedabad: 'ahmedabad'
+};
+
+function practoCitySlug(city: string): string {
+  const normalized = city.trim().toLowerCase();
+  return PRACTO_CITY_SLUGS[normalized] || normalized.replace(/\s+/g, '-') || 'bangalore';
+}
+
 export class PractoDirectoryProvider extends BaseDirectoryProvider {
   readonly directoryId = 'practo';
   readonly directoryName = 'Practo';
@@ -12,8 +26,11 @@ export class PractoDirectoryProvider extends BaseDirectoryProvider {
     source: SourceOfTruthNAP,
     options?: { pageTimeout?: number }
   ): Promise<ScrapedListing | null> {
-    const searchQuery = `${source.businessName || ''} ${source.city || ''}`.trim();
-    const searchUrl = `https://www.practo.com/search/clinics?results_type=clinic&q=${encodeURIComponent(searchQuery)}&city=${encodeURIComponent(source.city || '')}`;
+    // Practo's search API previously used a query-string form
+    // (/search/clinics?results_type=clinic&q=...&city=...) that now returns
+    // HTTP 400 — the site moved to a path-based city segment instead.
+    const citySlug = practoCitySlug(source.city || '');
+    const searchUrl = `https://www.practo.com/${citySlug}/clinics/search?q=${encodeURIComponent(source.businessName || '')}`;
 
     let browser;
     try {
@@ -23,8 +40,16 @@ export class PractoDirectoryProvider extends BaseDirectoryProvider {
       });
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
+      // Practo's server-rendered HTML ships an empty result list; the actual
+      // clinic cards load via a client-side fetch after hydration. Wait for
+      // a plausible result element (or network to settle) before extracting.
+      const nameSelector = '.clinic-name, h2[data-qa-id="clinic_name"], .c-clinic-listingV2, [data-qa-id*="clinic"]';
+      await Promise.race([
+        page.waitForSelector(nameSelector, { timeout: 10000 }).catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+      ]);
 
-      const fields = await extractDirectoryFields(page, page.url(), { name: '.clinic-name, h2[data-qa-id="clinic_name"]', address: '.locality-address, [data-qa-id="clinic_locality"]', phone: '.phone-number, [data-qa-id="clinic_phone"]', category: '.speciality, .clinic-speciality', hours: '.clinic-timings, .hours', photos: 'img[src]', description: '.clinic-description, .about', attributes: '.services, .amenities' });
+      const fields = await extractDirectoryFields(page, page.url(), { name: nameSelector, address: '.locality-address, [data-qa-id="clinic_locality"]', phone: '.phone-number, [data-qa-id="clinic_phone"]', category: '.speciality, .clinic-speciality', hours: '.clinic-timings, .hours', photos: 'img[src]', description: '.clinic-description, .about', attributes: '.services, .amenities' });
       const listingUrl = page.url();
 
       if (!fields.name && !fields.address) {

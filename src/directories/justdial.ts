@@ -24,10 +24,18 @@ export class JustdialDirectoryProvider extends BaseDirectoryProvider {
       });
       const page = await context.newPage();
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: options?.pageTimeout || 15000 });
-
-      const titleSelector = '.store-name, .jsx-3098522197, h2, .lng_cont_name';
-      const addressSelector = '.cont_fl_addr, .address-info, .address';
-      const phoneSelector = '.contact-info, .mobilesv, .call-now';
+      // Justdial's search results render client-side after an XHR fetch, so
+      // the page is still an empty shell right after domcontentloaded.
+      // Wait for a plausible result element (or network to settle) before
+      // extracting — but don't fail the whole scrape if neither shows up in
+      // time, since the extraction below has its own not-found handling.
+      const titleSelector = '.store-name, .jsx-3098522197, h2, .lng_cont_name, .resultbox_title, [class*="store-name"]';
+      const addressSelector = '.cont_fl_addr, .address-info, .address, .locatcity, [class*="address"]';
+      const phoneSelector = '.contact-info, .mobilesv, .call-now, [class*="callcontent"]';
+      await Promise.race([
+        page.waitForSelector(titleSelector, { timeout: 10000 }).catch(() => {}),
+        page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+      ]);
 
       const fields = await extractDirectoryFields(page, page.url(), { name: titleSelector, address: addressSelector, phone: phoneSelector, category: '.category, .cat-name', hours: '.working-hours, .hours', photos: 'img[src]', description: '.description, .about', attributes: '.amenities, .attributes' });
       const listingUrl = page.url();
