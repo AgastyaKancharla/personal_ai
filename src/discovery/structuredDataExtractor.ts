@@ -39,6 +39,18 @@ function definedValues(candidate: Partial<RawCandidate>): Partial<RawCandidate> 
   return Object.fromEntries(Object.entries(candidate).filter(([, value]) => value !== undefined)) as Partial<RawCandidate>;
 }
 
+// Directory sites often set schema.org `url` (or og:url) to their own page
+// about the business, not the business's independent website — Google Maps
+// and Lybrate both do this. Same-hostname is a strong signal it's
+// self-referential rather than a real external site.
+function isSameHost(candidate: string, pageUrl: string): boolean {
+  try {
+    return new URL(candidate).hostname === new URL(pageUrl).hostname;
+  } catch {
+    return false;
+  }
+}
+
 export async function extractStructuredData(html: string, url: string): Promise<Partial<RawCandidate> | null> {
   const scripts = html.matchAll(/<script\s+[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
   for (const script of scripts) {
@@ -50,11 +62,12 @@ export async function extractStructuredData(html: string, url: string): Promise<
       // page's own address (the `url` param) — that's the citation listing
       // page we're scraping, not the business's actual website, and the two
       // must never be conflated in a NAP diff.
+      const jsonLdUrl = typeof localBusiness.url === 'string' ? localBusiness.url : undefined;
       const candidate: Partial<RawCandidate> = {
         name: typeof localBusiness.name === 'string' ? localBusiness.name : undefined,
         address: formatAddress(localBusiness.address),
         phone: typeof localBusiness.telephone === 'string' ? localBusiness.telephone : undefined,
-        website: typeof localBusiness.url === 'string' ? localBusiness.url : undefined,
+        website: jsonLdUrl && !isSameHost(jsonLdUrl, url) ? jsonLdUrl : undefined,
         category: typeof localBusiness['@type'] === 'string' ? localBusiness['@type'] : undefined
       };
       if (candidate.name || candidate.address || candidate.phone || candidate.website) return definedValues(candidate);

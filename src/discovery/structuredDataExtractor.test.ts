@@ -18,6 +18,15 @@ async function run() {
 
   const empty = await extractStructuredData('<html><title>No business data</title></html>', 'https://empty.example');
   assert.equal(empty, null);
+
+  // A directory site (e.g. Google Maps, Lybrate) whose own JSON-LD `url`
+  // points back to itself must not have that treated as the business's
+  // website — same-hostname is the self-referential signal.
+  const selfReferential = await extractStructuredData(`
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"LocalBusiness","name":"Bright Smile","url":"https://www.google.com/maps/place/Bright+Smile"}
+    </script>`, 'https://www.google.com/maps/search/Bright+Smile');
+  assert.deepEqual(selfReferential, { name: 'Bright Smile', category: 'LocalBusiness' });
 }
 
 run().then(() => console.log('structuredDataExtractor tests passed'));
