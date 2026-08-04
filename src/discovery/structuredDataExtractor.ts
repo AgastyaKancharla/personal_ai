@@ -46,22 +46,27 @@ export async function extractStructuredData(html: string, url: string): Promise<
       const records = flattenJsonLd(JSON.parse(script[1].trim()));
       const localBusiness = records.find(isLocalBusiness);
       if (!localBusiness) continue;
+      // `url` is intentionally left undefined rather than falling back to the
+      // page's own address (the `url` param) — that's the citation listing
+      // page we're scraping, not the business's actual website, and the two
+      // must never be conflated in a NAP diff.
       const candidate: Partial<RawCandidate> = {
         name: typeof localBusiness.name === 'string' ? localBusiness.name : undefined,
         address: formatAddress(localBusiness.address),
         phone: typeof localBusiness.telephone === 'string' ? localBusiness.telephone : undefined,
-        website: typeof localBusiness.url === 'string' ? localBusiness.url : url,
+        website: typeof localBusiness.url === 'string' ? localBusiness.url : undefined,
         category: typeof localBusiness['@type'] === 'string' ? localBusiness['@type'] : undefined
       };
       if (candidate.name || candidate.address || candidate.phone || candidate.website) return definedValues(candidate);
     } catch {}
   }
 
+  // og:url is the directory page's own canonical URL, not the business's
+  // website — do not use it as a website value for the same reason as above.
   const candidate: Partial<RawCandidate> = {
     name: metaContent(html, ['og:title', 'twitter:title']),
     address: metaContent(html, ['business:contact_data:street_address', 'street-address', 'address', 'geo.placename']),
-    phone: metaContent(html, ['business:contact_data:phone_number', 'telephone', 'phone']),
-    website: metaContent(html, ['og:url']) || url
+    phone: metaContent(html, ['business:contact_data:phone_number', 'telephone', 'phone'])
   };
   return candidate.name || candidate.address || candidate.phone ? definedValues(candidate) : null;
 }
