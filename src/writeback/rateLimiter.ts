@@ -1,3 +1,0 @@
-import { getSupabaseClient } from '../db/supabase';
-export const MAX_WRITES_PER_BUSINESS_DIRECTORY_DAY = 3;
-export async function canExecuteWrite(auditReportRef: string, directory: string): Promise<boolean> { const supabase = getSupabaseClient(); if (!supabase) return false; const since = new Date(Date.now() - 86400000).toISOString(); const { count, error } = await supabase.from('write_jobs').select('*', { count: 'exact', head: true }).eq('audit_report_ref', auditReportRef).eq('directory', directory).eq('status', 'SUCCESS').gte('updated_at', since); if (error) throw error; return (count || 0) < MAX_WRITES_PER_BUSINESS_DIRECTORY_DAY; }
