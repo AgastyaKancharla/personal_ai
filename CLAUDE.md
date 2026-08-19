@@ -11,10 +11,12 @@ npm run build        # production build
 npm run start         # run the production build
 npm run typecheck     # tsc --noEmit
 npm run lint          # next lint
+npm run test          # vitest run — the rules engine's unit + fixture tests
+npm run export-training-data  # parse_log -> train.jsonl/eval.jsonl (needs Supabase env)
 ```
 
-There is no test suite yet. `npm run build` and `npm run typecheck` are the checks to run
-before pushing.
+`npm run build`, `npm run typecheck`, and `npm run test` are the checks to run before
+pushing. Use `npx vitest` (no `run`) for watch mode while iterating locally.
 
 ## What this is
 
@@ -43,13 +45,21 @@ with zero policies, so even a leaked anon key can't touch it — only the servic
 by design. The client polls `GET /api/data` on load and debounce-saves the whole state via
 `PUT /api/data` 500ms after any change (see `app/page.tsx`).
 
-**Quick-add is a server-side LLM call, not client logic.** `components/QuickAdd.tsx` posts raw
-text to `POST /api/quick-add`, which builds a prompt (client roster, today's date, the 14-item
-`SERVICES` catalogue) and calls the Anthropic API with `ANTHROPIC_API_KEY` (server-only). The
-model returns a structured `QuickAddAction[]` (defined in `lib/types.ts`), which
-`lib/actions.ts`'s `applyActions` interprets client-side against local state — fuzzy-matching
-client names, creating clients on demand, updating stage/money/deliverables/tasks. This
-action schema is the same shared contract `docs/persona-brain-spec.md` versions and extends.
+**Quick-add runs a local rules engine first, an LLM only as fallback.** `components/QuickAdd.tsx`
+posts raw text to `POST /api/quick-add`, which calls `lib/parse/parse()` — a dependency-free
+TypeScript engine (money/date/stage-verb/service/client/completion matchers, `lib/parse/*.ts`)
+that returns actions plus an honest 0–1 confidence score. Confidence ≥ 0.6 returns immediately,
+no network call. Below that, and only if `ANTHROPIC_API_KEY` is set, it falls back to
+`lib/parse/providers/anthropic.ts` (swappable behind `lib/parse/providers/types.ts`'s `Provider`
+interface). Every parse — whichever engine produced it — is logged to the `parse_log` table
+(`lib/supabase.ts`'s `insertParseLog`); the returned `logId` lets `QuickAdd.tsx`'s one-tap
+"Not right" control PATCH `/api/parse-log/[id]` with a correction, or silently mark the parse
+accepted after ~8s. `lib/parse/fixtures/hundredEntries.ts` is the rules engine's regression
+suite — a new logged failure pattern belongs there as a new case, not just a code fix. Either
+engine returns a `QuickAddAction[]` (defined in `lib/types.ts`, aliased as `Action` — the shared
+contract `docs/persona-brain-spec.md` versions), which `lib/actions.ts`'s `applyActions`
+interprets client-side against local state — fuzzy-matching client names, creating clients on
+demand, updating stage/money/deliverables/tasks.
 
 **Domain model** (`lib/types.ts`, `lib/catalogue.ts`):
 - A `Client` moves through a fixed 8-stage pipeline (`cold` → ... → `delivered`, see `STAGES`
@@ -72,6 +82,10 @@ library — Tailwind is present but used sparingly (layout utilities only).
 - Next.js is pinned to `14.2.35`; a bundled `postcss` vulnerability is only fixed by the
   Next 16 major upgrade. Not urgent for this single-user app since it doesn't use React
   Server Actions (the vector the related advisory concerns) — see README's Security notes.
-- No automated tests exist. `docs/persona-brain-spec.md` Phase 1 specifically requires unit
-  tests for the rules engine it introduces ("the test file is the specification") — that
-  precedent should extend to any other logic-heavy code added here.
+- `lib/parse/` has full unit + fixture test coverage (Vitest); the test file is the
+  specification, per `docs/persona-brain-spec.md` Phase 1. That precedent should extend to
+  any other logic-heavy code added here — the rest of the app (UI components, API routes)
+  still has no automated tests.
+- `tracker_state` and `parse_log` are normal, unnormalised Supabase tables (Phase 0.2 —
+  splitting `clients`/`tasks` into real tables — is deliberately deferred; see
+  `docs/persona-brain-spec.md`'s Amendments).

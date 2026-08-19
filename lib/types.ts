@@ -51,3 +51,8 @@ export type QuickAddAction =
   | { type: 'done'; clientName: string; match: string }
   | { type: 'tick'; match: string }
   | { type: 'followup'; clientName: string; date: string };
+
+// Shared contract name used by the rules/API parse engines (lib/parse/) and
+// by training-data export — same shape as QuickAddAction, kept as one alias
+// so app code, engine code and logged training data never drift apart.
+export type Action = QuickAddAction;

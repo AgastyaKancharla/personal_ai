@@ -8,6 +8,30 @@ phase before the previous one meets its acceptance criteria.
 
 ---
 
+## Amendments (post Phase 1+2)
+
+Read these before the rest of this document — they supersede it where they conflict.
+
+1. **Phase 0.1 is done, differently and better.** The app uses a password + HMAC-signed
+   cookie gate (`middleware.ts`, `lib/auth.ts`) with a service-role Supabase client used
+   only on the server, RLS enabled with zero policies. For a single-user app this is
+   stronger than Supabase Auth with `auth.uid()` RLS — nothing is reachable from the
+   browser at all. Keep it; do not migrate to Supabase Auth.
+2. **Phase 0.2 is deferred.** The `tracker_state` blob table stays for now; normalising
+   `clients`/`tasks` into real tables is not required yet and adds migration risk for no
+   current gain. `parse_log` (Phase 2) is a proper table alongside the blob.
+3. The stale anon RLS policies once present on `tracker_state` have been dropped on the
+   live database — it matches `supabase/schema.sql`. Do not re-add them.
+4. **Phase 1 (rules engine) and Phase 2 (logging/correction) shipped together**, in
+   `lib/parse/`, `supabase/schema.sql`'s `parse_log` table, `app/api/quick-add/route.ts`,
+   and `components/QuickAdd.tsx`. The Anthropic call is now a demoted fallback behind
+   `lib/parse/providers/` — only invoked when the rules engine's confidence is below 0.6
+   and `ANTHROPIC_API_KEY` is set. See `lib/parse/fixtures/hundredEntries.ts` for the
+   100-entry coverage set (100% pass rate as of this writing) and `lib/parse/*.test.ts`
+   for the matcher-level specification.
+
+---
+
 ## Phase 0 — Secure and normalise what's live
 
 The tracker is already deployed and holding real business data behind nothing.

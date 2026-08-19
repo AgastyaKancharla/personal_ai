@@ -12,3 +12,23 @@ export function supabaseServer() {
 }
 
 export const TRACKER_ROW_ID = 'main';
+
+export interface ParseLogInsert {
+  raw_text: string;
+  engine: 'rules' | 'api';
+  output: unknown;
+  confidence: number | null;
+}
+
+/** Writes one parse_log row and returns its id, or null if the insert
+ * failed — logging failures should never block filing the user's actions. */
+export async function insertParseLog(row: ParseLogInsert): Promise<string | null> {
+  try {
+    const supabase = supabaseServer();
+    const { data, error } = await supabase.from('parse_log').insert(row).select('id').single();
+    if (error) throw error;
+    return data.id as string;
+  } catch {
+    return null;
+  }
+}
