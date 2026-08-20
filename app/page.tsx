@@ -236,7 +236,7 @@ export default function Home() {
               </div>
             </div>
           )}
-          {tab === 'today' && <TodayView data={data} actions={actions} />}
+          {tab === 'today' && <TodayView data={data} actions={actions} onGotoClients={() => setTab('clients')} />}
           {tab === 'week' && <WeekView data={data} actions={actions} />}
           {tab === 'month' && <MonthView data={data} />}
           {tab === 'clients' && <ClientsView data={data} actions={actions} />}

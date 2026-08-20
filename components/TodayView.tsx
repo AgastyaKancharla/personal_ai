@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Phone } from 'lucide-react';
+import { ListPlus, Phone, Sparkles, UserPlus } from 'lucide-react';
 import { C, DISPLAY, BODY } from '@/lib/theme';
 import { STAGES, stageIndex } from '@/lib/catalogue';
 import { DOW, MONTHS, today } from '@/lib/dates';
@@ -10,8 +10,18 @@ import { Actions } from '@/lib/actions';
 import { Card, Empty, Eyebrow } from './Primitives';
 import { TaskRow } from './TaskRow';
 import { AddTask } from './AddTask';
+import { WeekAhead } from './WeekAhead';
 
-export function TodayView({ data, actions }: { data: TrackerState; actions: Actions }) {
+const TASK_INPUT_ID = 'today-quick-task';
+
+function jumpTo(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.focus();
+}
+
+export function TodayView({ data, actions, onGotoClients }: { data: TrackerState; actions: Actions; onGotoClients: () => void }) {
   const t = today();
   const byId = useMemo(() => Object.fromEntries(data.clients.map((c) => [c.id, c])), [data.clients]);
   const todays = data.tasks.filter((x) => x.date === t);
@@ -22,6 +32,33 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
 
   return (
     <div className="space-y-5">
+      <div className="flex gap-2">
+        <button
+          onClick={() => jumpTo(TASK_INPUT_ID)}
+          className="flex-1 rounded-xl flex items-center justify-center gap-1.5"
+          style={{ height: 40, background: C.ink }}
+        >
+          <ListPlus size={14} color={C.white} />
+          <span style={{ fontSize: 12.5, color: C.white, fontWeight: 600 }}>Task</span>
+        </button>
+        <button
+          onClick={onGotoClients}
+          className="flex-1 rounded-xl flex items-center justify-center gap-1.5"
+          style={{ height: 40, background: C.white, border: `1px solid ${C.line}` }}
+        >
+          <UserPlus size={14} color={C.ink} />
+          <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>Client</span>
+        </button>
+        <button
+          onClick={() => jumpTo('quick-add-input')}
+          className="flex-1 rounded-xl flex items-center justify-center gap-1.5"
+          style={{ height: 40, background: C.white, border: `1px solid ${C.line}` }}
+        >
+          <Sparkles size={14} color={C.orange} />
+          <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>Quick add</span>
+        </button>
+      </div>
+
       <div className="flex items-end justify-between">
         <div>
           <div style={{ fontFamily: DISPLAY, fontSize: 44, fontWeight: 800, lineHeight: 0.9, color: C.ink }}>{d.getDate()}</div>
@@ -55,7 +92,7 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
         ) : (
           todays.map((x) => <TaskRow key={x.id} task={x} client={byId[x.clientId || '']} onToggle={actions.toggleTask} onDelete={actions.deleteTask} />)
         )}
-        <AddTask date={t} clients={data.clients} onAdd={actions.addTask} />
+        <AddTask id={TASK_INPUT_ID} date={t} clients={data.clients} onAdd={actions.addTask} />
       </Card>
 
       {followUps.length > 0 && (
@@ -80,6 +117,8 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
           ))}
         </Card>
       )}
+
+      <WeekAhead data={data} onOpenClient={actions.openClient} />
     </div>
   );
 }
