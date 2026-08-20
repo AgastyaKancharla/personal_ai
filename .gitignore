@@ -1,3 +1,9 @@
-dist/
-node_modules/
+node_modules
+.next
+out
+dist
 .env
+.env.local
+.DS_Store
+npm-debug.log*
+*.tsbuildinfo
