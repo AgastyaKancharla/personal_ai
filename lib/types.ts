@@ -12,6 +12,12 @@ export interface Deliverable {
   id: string;
   text: string;
   done: boolean;
+  // The service/service group this step came from (e.g. "Google Business
+  // Profile Optimization"), so multiple services' checklists on one client
+  // can render as separate groups instead of one undifferentiated list.
+  // Undefined for ad-hoc items (typed one at a time, or pasted from a
+  // quote with no per-line service attribution).
+  category?: string;
 }
 
 export interface Client {

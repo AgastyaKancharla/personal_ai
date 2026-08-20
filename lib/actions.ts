@@ -13,7 +13,7 @@ export interface Actions {
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;
   setStage: (id: string, stage: StageKey) => void;
-  addDeliverables: (id: string, texts: string[]) => void;
+  addDeliverables: (id: string, texts: string[], category?: string) => void;
   toggleDeliverable: (clientId: string, deliverableId: string) => void;
   deleteDeliverable: (clientId: string, deliverableId: string) => void;
   openClient: (id: string) => void;
@@ -61,12 +61,12 @@ export function makeActions(setData: SetState, openClientId: (id: string) => voi
         )
       })),
 
-    addDeliverables: (id, texts) =>
+    addDeliverables: (id, texts, category) =>
       setData((d) => ({
         ...d,
         clients: d.clients.map((c) =>
           c.id === id
-            ? { ...c, deliverables: [...c.deliverables, ...texts.map((t) => ({ id: uid(), text: t, done: false }))] }
+            ? { ...c, deliverables: [...c.deliverables, ...texts.map((t) => ({ id: uid(), text: t, done: false, category }))] }
             : c
         )
       })),
@@ -158,7 +158,7 @@ export function makeActions(setData: SetState, openClientId: (id: string) => voi
                 const cur = get(c.id);
                 const existing = new Set(cur.deliverables.map((x) => x.text));
                 const fresh = svc.steps.filter((s) => !existing.has(s));
-                patch(c.id, { deliverables: [...cur.deliverables, ...fresh.map((t) => ({ id: uid(), text: t, done: false }))] });
+                patch(c.id, { deliverables: [...cur.deliverables, ...fresh.map((t) => ({ id: uid(), text: t, done: false, category: svc.name }))] });
               }
             } else if (a.type === 'done') {
               const c = find(a.clientName);
