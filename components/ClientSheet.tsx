@@ -92,8 +92,14 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
           </button>
           <button
             onClick={() => {
-              actions.deleteClient(client.id);
-              onClose();
+              // One tap here used to delete the whole client — name, stage,
+              // money, every deliverable and note — with no way back. Lost
+              // a real client that way. A confirm is cheap; losing a
+              // client's history to a mis-tap isn't.
+              if (window.confirm(`Delete ${client.name}? This removes everything — stage, money, deliverables, notes. Can't be undone.`)) {
+                actions.deleteClient(client.id);
+                onClose();
+              }
             }}
             style={{ color: C.line }}
           >
