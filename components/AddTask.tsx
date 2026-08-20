@@ -8,11 +8,13 @@ import { Client } from '@/lib/types';
 export function AddTask({
   date,
   clients,
-  onAdd
+  onAdd,
+  id
 }: {
   date: string;
   clients: Client[];
   onAdd: (title: string, clientId: string | null, date: string) => void;
+  id?: string;
 }) {
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
@@ -26,6 +28,7 @@ export function AddTask({
   return (
     <div className="flex gap-2 mt-3">
       <input
+        id={id}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && submit()}

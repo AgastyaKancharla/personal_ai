@@ -125,6 +125,7 @@ export function QuickAdd({ clients, onApply }: { clients: Client[]; onApply: (ac
         <div className="flex items-center gap-2 rounded-2xl p-1.5" style={{ background: C.white, border: `1px solid ${C.line}`, boxShadow: '0 8px 24px rgba(10,36,34,0.12)' }}>
           <Sparkles size={15} color={C.orange} style={{ marginLeft: 7 }} className="shrink-0" />
           <input
+            id="quick-add-input"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && run()}
