@@ -64,13 +64,38 @@ export default function Home() {
     }
     setStatus('saving');
     if (timer.current) clearTimeout(timer.current);
+
+    const doSave = () =>
+      fetch('/api/data', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+        keepalive: true
+      });
+
+    // A refresh, tab close, or app switch cancels the pending setTimeout
+    // outright, silently dropping whatever the 500ms debounce hadn't sent
+    // yet — that's the "edited a client, refreshed, and it was gone" bug.
+    // keepalive lets the browser finish this request after the page starts
+    // unloading; pagehide/visibilitychange fire even when a hard refresh
+    // never gives beforeunload a chance to run (common on mobile).
+    const flush = () => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+        doSave();
+      }
+    };
+    const flushIfHidden = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', flushIfHidden);
+
     timer.current = setTimeout(async () => {
+      timer.current = null;
       try {
-        const res = await fetch('/api/data', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
+        const res = await doSave();
         if (!res.ok) throw new Error('save failed');
         setUpdatedAt(new Date().toISOString());
         setStatus('ok');
@@ -78,6 +103,11 @@ export default function Home() {
         setStatus('offline');
       }
     }, 500);
+
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', flushIfHidden);
+    };
   }, [data, ready]);
 
   const actions = makeActions(setData, setOpenId);
