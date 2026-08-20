@@ -52,20 +52,16 @@ export async function POST(req: NextRequest) {
   }
 
   // No provider, or it failed — hand back the rules result as-is, low
-  // confidence included, and let the correction UI catch it.
+  // confidence (or zero actions) included, rather than failing the request.
+  // buildSummary() already returns 'Nothing recognized' for an empty action
+  // list, and the correction UI's "Not right" control needs a real logId on
+  // a successful response to be reachable at all.
   const logId = await insertParseLog({
     raw_text: note,
     engine: 'rules',
     output: rulesResult.actions,
     confidence: rulesResult.confidence
   });
-
-  if (!rulesResult.actions.length) {
-    return NextResponse.json(
-      { error: 'Nothing to file in that. Name the client (or say it is personal) and what happened.', logId },
-      { status: 422 }
-    );
-  }
 
   return NextResponse.json({ actions: rulesResult.actions, summary: rulesResult.summary, logId });
 }

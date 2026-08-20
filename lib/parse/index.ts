@@ -99,7 +99,10 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
   const completion = matchCompletion(text);
   if (completion) {
     claim(completion.span);
-    bonus += 0.2;
+    // "X done for client" / "client's X is live" is a complete, self-
+    // contained claim once the client resolves — full-strength credit,
+    // not a lesser signal than the client match itself.
+    bonus += 0.3;
     const item = stripClientName(completion.item, clientName);
     if (client) {
       actions.push({ type: 'done', clientName: client.name, match: item });
@@ -143,7 +146,10 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
   const serviceInsideCompletion = !!(service && completion && overlaps(service.span, completion.span));
   if (service && client && !serviceInsideCompletion) {
     claim(service.span);
-    bonus += 0.2;
+    // Matched against the fixed 14-item catalogue (lib/catalogue.ts) —
+    // effectively zero false-positive risk once matched, so it earns the
+    // same full-strength credit as the client match.
+    bonus += 0.3;
     actions.push({ type: 'service', clientName: client.name, service: service.service });
   }
 
@@ -175,7 +181,15 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
 
   verbs.forEach((v, i) => {
     claim(v.span);
-    bonus += 0.2;
+    // A recognized verb plus a resolved client is a complete claim
+    // ("Verma Dental is interested") — no less certain than the client
+    // match itself, so it earns the same full-strength credit. Without a
+    // resolved client, keep the original lower credit: unlike service or
+    // completion, verbs can stack (a sentence can mention several), and
+    // full-strength credit would let two verbs on an ambiguous/unresolved
+    // client reach the threshold on their own — a parse that filed nothing
+    // passing as if it were confidently handled.
+    bonus += client ? 0.3 : 0.2;
     if (i === pairedVerbIndex) {
       const word = text.slice(v.span[0], v.span[1]);
       actions.push({ type: 'task', title: capitalize(word), clientName, date: date!.date });

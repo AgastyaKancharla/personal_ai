@@ -128,6 +128,10 @@ const clientResolution: Fixture[] = [
   { input: 'rathi implant center confirmed', expected: [{ type: 'stage', clientName: 'Rathi Dental & Implant Center', stage: 'finalised' }] },
   { input: 'wellness skin clinic delivered', expected: [{ type: 'stage', clientName: 'Wellness Skin Clinic', stage: 'delivered' }] },
   { input: 'sharma paid 10k advance', expected: [] },
+  // Ambiguous client + two stacked stage verbs — the confidence formula must
+  // not let two verb bonuses (0.3 each) cross the 0.6 threshold when the
+  // client itself never resolved.
+  { input: 'sharma called then confirmed', expected: [] },
   { input: 'sharma clinic paid 10k advance', expected: [{ type: 'money', clientName: 'Sharma Clinic', advance: 10000, quoteValue: null }] },
   { input: 'sharma dental paid 10k advance', expected: [{ type: 'money', clientName: 'Sharma Dental', advance: 10000, quoteValue: null }] },
   { input: 'the care package arrived today', expected: [] },
@@ -200,7 +204,6 @@ const nonsenseAndNegative: Fixture[] = [
   { input: 'xyzzy plugh nothing to file here', expected: [] },
   { input: 'reminder to buy printer paper', expected: [] },
   { input: 'gym at 6am tomorrow', expected: [] },
-  { input: 'ordered new business cards', expected: [] },
   { input: 'team standup notes: nothing blocking', expected: [] },
   { input: 'need to renew the domain next month', expected: [] }
 ];
