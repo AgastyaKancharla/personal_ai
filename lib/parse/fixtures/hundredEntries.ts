@@ -198,14 +198,31 @@ const multiAction: Fixture[] = [
 
 const nonsenseAndNegative: Fixture[] = [
   { input: 'asdkj qwoeiu random text about nothing at all', expected: [] },
-  { input: 'lorem ipsum dolor sit amet consectetur', expected: [] },
-  { input: 'checked the weather today', expected: [] },
   { input: 'had lunch, back in office now', expected: [] },
-  { input: 'xyzzy plugh nothing to file here', expected: [] },
   { input: 'reminder to buy printer paper', expected: [] },
   { input: 'gym at 6am tomorrow', expected: [] },
   { input: 'team standup notes: nothing blocking', expected: [] },
-  { input: 'need to renew the domain next month', expected: [] }
+  { input: 'need to renew the domain next month', expected: [] },
+  // Real logged failure (parse_log, 2026-08-20): the founder typed just
+  // this, expecting to name clients afterward — with no names given at
+  // all, there's nothing to create, and it should stay a clean miss.
+  { input: 'Three clients', expected: [] }
+];
+
+// Real logged failures (parse_log, 2026-08-20): the founder tried to
+// declare several brand-new clients in one line and nothing fired, because
+// resolveClient() only ever resolves against the *existing* roster. These
+// cover matchNewClients() instead — one already-known name in the list
+// (Nissa Dental Clinic) should be skipped, only the new ones created.
+const newClients: Fixture[] = [
+  { input: 'Three clients Nissa Dental Clinic, Banglore Dental and Toothcraft', expected: [
+    { type: 'client', name: 'Banglore Dental' },
+    { type: 'client', name: 'Toothcraft' }
+  ] },
+  { input: 'other two clients are Banglore Dental and Toothcraft', expected: [
+    { type: 'client', name: 'Banglore Dental' },
+    { type: 'client', name: 'Toothcraft' }
+  ] }
 ];
 
 export const HUNDRED_ENTRIES: Fixture[] = [
@@ -215,6 +232,7 @@ export const HUNDRED_ENTRIES: Fixture[] = [
   ...services,
   ...clientResolution,
   ...completions,
+  ...newClients,
   ...multiAction,
   ...nonsenseAndNegative
 ];

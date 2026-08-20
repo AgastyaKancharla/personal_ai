@@ -6,6 +6,7 @@ import { scanStageVerbs } from './stageVerbs';
 import { resolveClient } from './clients';
 import { matchService } from './services';
 import { matchCompletion } from './completion';
+import { matchNewClients } from './newClients';
 
 export type { ParseContext, ParseResult } from './types';
 
@@ -59,9 +60,14 @@ function buildSummary(actions: Action[], clientName: string | null): string {
         return `Marked "${a.match}" done`;
       case 'tick':
         return `Ticked "${a.match}"`;
+      case 'client':
+        return `Added ${a.name}`;
       default:
         return 'Filed 1 update';
     }
+  }
+  if (actions.every((a) => a.type === 'client')) {
+    return `Added ${actions.length} new clients`;
   }
   return `Filed ${actions.length} updates${clientName ? ` for ${clientName}` : ''}`;
 }
@@ -79,6 +85,28 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
   };
   let bonus = 0;
   const actions: Action[] = [];
+
+  // A batch declaration of brand-new clients ("3 clients A, B and C") is a
+  // structurally different sentence from everything below — there's no
+  // single owner for a stage/money/service action to attach to, just a
+  // list of names to create. Handle it as its own self-contained parse
+  // rather than letting resolveClient() partially match one name in the
+  // list and leave the rest stranded.
+  const newClients = matchNewClients(text, ctx.clients);
+  if (newClients) {
+    const newActions: Action[] = newClients.names.map((name) => ({ type: 'client', name, phone: null }));
+    const unconsumed = redact(text, [newClients.span]);
+    const wordCount = unconsumed.length ? unconsumed.split(/\s+/).length : 0;
+    const penalty = Math.floor(wordCount / 5) * 0.1;
+    const confidence = Math.max(0, Math.min(1, 0.9 - penalty));
+    return {
+      actions: newActions,
+      confidence: Math.round(confidence * 100) / 100,
+      engine: 'rules',
+      summary: buildSummary(newActions, null),
+      unconsumed
+    };
+  }
 
   // Client resolution runs first: money/stage/service/completion actions all
   // need a resolved owner, and an ambiguous match must not guess.
