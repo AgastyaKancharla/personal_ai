@@ -18,6 +18,19 @@ export interface Deliverable {
   // Undefined for ad-hoc items (typed one at a time, or pasted from a
   // quote with no per-line service attribution).
   category?: string;
+  // What was promised for this specific line, when a quote doc or manual
+  // entry says so — kept as a display string (e.g. "₹80,000"), same
+  // convention as Client.quoteValue/advance, not a running total.
+  price?: string;
+  deadline?: string;
+}
+
+// Shape accepted by addDeliverables — text is required, price/deadline
+// are only ever known when a source (a quote doc, a manual entry) says so.
+export interface DeliverableInput {
+  text: string;
+  price?: string;
+  deadline?: string;
 }
 
 export interface Client {

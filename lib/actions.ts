@@ -1,4 +1,4 @@
-import { Client, QuickAddAction, StageKey, Task, TrackerState } from './types';
+import { Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
 import { stageIndex } from './catalogue';
 import { findService } from './catalogue';
 import { today, uid } from './dates';
@@ -13,7 +13,7 @@ export interface Actions {
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;
   setStage: (id: string, stage: StageKey) => void;
-  addDeliverables: (id: string, texts: string[], category?: string) => void;
+  addDeliverables: (id: string, items: DeliverableInput[], category?: string) => void;
   toggleDeliverable: (clientId: string, deliverableId: string) => void;
   deleteDeliverable: (clientId: string, deliverableId: string) => void;
   openClient: (id: string) => void;
@@ -61,12 +61,18 @@ export function makeActions(setData: SetState, openClientId: (id: string) => voi
         )
       })),
 
-    addDeliverables: (id, texts, category) =>
+    addDeliverables: (id, items, category) =>
       setData((d) => ({
         ...d,
         clients: d.clients.map((c) =>
           c.id === id
-            ? { ...c, deliverables: [...c.deliverables, ...texts.map((t) => ({ id: uid(), text: t, done: false, category }))] }
+            ? {
+                ...c,
+                deliverables: [
+                  ...c.deliverables,
+                  ...items.map((it) => ({ id: uid(), text: it.text, done: false, category, price: it.price, deadline: it.deadline }))
+                ]
+              }
             : c
         )
       })),
