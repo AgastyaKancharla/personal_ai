@@ -18,6 +18,27 @@ type Status = 'loading' | 'ok' | 'saving' | 'offline';
 type Tab = 'today' | 'week' | 'month' | 'clients';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
+const CACHE_KEY = 'personal-ai:last-saved';
+
+type Cached = { state: TrackerState; updatedAt: string };
+
+function readCache(): Cached | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Cached) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(state: TrackerState, updatedAt: string) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ state, updatedAt }));
+  } catch {
+    // best-effort only — a full localStorage or private-browsing mode
+    // shouldn't break saving to the actual database
+  }
+}
 
 export default function Home() {
   const router = useRouter();
@@ -31,6 +52,7 @@ export default function Home() {
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boot = useRef(true);
+  const forceResave = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -38,12 +60,29 @@ export default function Home() {
         const res = await fetch('/api/data');
         if (res.status === 401) {
           router.replace('/login');
+          setReady(true);
           return;
         }
         const out = await res.json();
         if (!res.ok) throw new Error(out.error || 'load failed');
-        setDataRaw(out.state);
-        setUpdatedAt(out.updatedAt);
+
+        const cached = readCache();
+        // A read immediately after a write can occasionally come back
+        // stale (seen live in production: a save completes, and a load a
+        // few seconds later comes back without it, even though the row
+        // was already correctly written). Never let a technically-200
+        // but stale read regress onto state we already know is good —
+        // trust whichever side has the newer timestamp, and if that's
+        // the local cache, push it back up so the server catches up too.
+        if (cached && (!out.updatedAt || new Date(cached.updatedAt) > new Date(out.updatedAt))) {
+          setDataRaw(cached.state);
+          setUpdatedAt(cached.updatedAt);
+          forceResave.current = true;
+        } else {
+          setDataRaw(out.state);
+          setUpdatedAt(out.updatedAt);
+          writeCache(out.state, out.updatedAt || new Date().toISOString());
+        }
         setStatus('ok');
       } catch (e) {
         setStatus('offline');
@@ -60,7 +99,13 @@ export default function Home() {
     if (!ready) return;
     if (boot.current) {
       boot.current = false;
-      return;
+      // Normally the very first data-effect run is just the mount load
+      // settling in, not a real edit — nothing to save. The one exception
+      // is when that load decided the server's own read was stale and
+      // substituted our local cache instead; that needs to reach the
+      // server so it catches up, so fall through to schedule a save.
+      if (!forceResave.current) return;
+      forceResave.current = false;
     }
     setStatus('saving');
     if (timer.current) clearTimeout(timer.current);
@@ -78,11 +123,14 @@ export default function Home() {
     // yet — that's the "edited a client, refreshed, and it was gone" bug.
     // keepalive lets the browser finish this request after the page starts
     // unloading; pagehide/visibilitychange fire even when a hard refresh
-    // never gives beforeunload a chance to run (common on mobile).
+    // never gives beforeunload a chance to run (common on mobile). Cache
+    // is written synchronously before the request so even an unobserved
+    // (page-gone) response still leaves the next load with the right data.
     const flush = () => {
       if (timer.current) {
         clearTimeout(timer.current);
         timer.current = null;
+        writeCache(data, new Date().toISOString());
         doSave();
       }
     };
@@ -97,7 +145,9 @@ export default function Home() {
       try {
         const res = await doSave();
         if (!res.ok) throw new Error('save failed');
-        setUpdatedAt(new Date().toISOString());
+        const savedAt = new Date().toISOString();
+        setUpdatedAt(savedAt);
+        writeCache(data, savedAt);
         setStatus('ok');
       } catch (e) {
         setStatus('offline');

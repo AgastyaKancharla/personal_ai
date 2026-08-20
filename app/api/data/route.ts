@@ -22,16 +22,8 @@ export async function GET() {
     if (error) throw error;
 
     const state: TrackerState = data?.data ?? { clients: [], tasks: [] };
-    // TEMPORARY diagnostic for a live data-loss report — remove once resolved.
-    console.log('[api/data GET]', {
-      foundRow: !!data,
-      clients: state.clients.length,
-      tasks: state.tasks.length,
-      updatedAt: data?.updated_at ?? null
-    });
     return NextResponse.json({ state, updatedAt: data?.updated_at ?? null });
   } catch (err: any) {
-    console.log('[api/data GET] error', err.message);
     return NextResponse.json({ error: err.message || 'Failed to load state.' }, { status: 500 });
   }
 }
@@ -50,11 +42,8 @@ export async function PUT(req: NextRequest) {
 
     if (error) throw error;
 
-    // TEMPORARY diagnostic for a live data-loss report — remove once resolved.
-    console.log('[api/data PUT]', { clients: body.clients.length, tasks: body.tasks.length });
     return NextResponse.json({ ok: true });
   } catch (err: any) {
-    console.log('[api/data PUT] error', err.message);
     return NextResponse.json({ error: err.message || 'Failed to save state.' }, { status: 500 });
   }
 }
