@@ -110,12 +110,17 @@ export default function Home() {
     setStatus('saving');
     if (timer.current) clearTimeout(timer.current);
 
-    const doSave = () =>
+    // keepalive is reserved for the unload flush below — it shares the
+    // browser's small (~64KB) total keepalive request-body quota across
+    // every in-flight request, and this save ships the entire tracker
+    // state, so forcing it on every normal debounced save risks silently
+    // failing once a board's notes/deliverables grow past that budget.
+    const doSave = (opts?: { keepalive?: boolean }) =>
       fetch('/api/data', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
-        keepalive: true
+        keepalive: !!opts?.keepalive
       });
 
     // A refresh, tab close, or app switch cancels the pending setTimeout
@@ -131,7 +136,7 @@ export default function Home() {
         clearTimeout(timer.current);
         timer.current = null;
         writeCache(data, new Date().toISOString());
-        doSave();
+        doSave({ keepalive: true });
       }
     };
     const flushIfHidden = () => {
