@@ -19,6 +19,19 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
   const built = client.deliverables.filter((d) => d.done).length;
   const balance = Math.max(0, (Number(client.quoteValue) || 0) - (Number(client.advance) || 0));
 
+  // Deliverables are always appended, never inserted mid-array, so items
+  // from the same service template naturally stay contiguous — grouping
+  // consecutive same-category runs is enough to separate "GBP Optimization"
+  // from "Website Development" without a full group-by pass. Items with no
+  // category (ad-hoc adds, pasted quote lines) render under no header at
+  // all, same as before this existed.
+  const deliverableGroups = client.deliverables.reduce<{ category?: string; items: typeof client.deliverables }[]>((acc, d) => {
+    const last = acc[acc.length - 1];
+    if (last && last.category === d.category) last.items.push(d);
+    else acc.push({ category: d.category, items: [d] });
+    return acc;
+  }, []);
+
   const addPasted = () => {
     const lines = paste
       .split('\n')
@@ -123,24 +136,36 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
               Nothing promised yet. Pull it from the final quote below.
             </div>
           )}
-          {client.deliverables.map((d) => (
-            <div key={d.id} className="flex items-start gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.line}` }}>
-              <button
-                onClick={() => actions.toggleDeliverable(client.id, d.id)}
-                className="shrink-0 rounded-md flex items-center justify-center"
-                style={{ width: 20, height: 20, marginTop: 1, border: `1.5px solid ${d.done ? C.teal : C.line}`, background: d.done ? C.teal : 'transparent' }}
-              >
-                {d.done && <Check size={12} color={C.white} strokeWidth={3} />}
-              </button>
-              <span
-                className="flex-1"
-                style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
-              >
-                {d.text}
-              </span>
-              <button onClick={() => actions.deleteDeliverable(client.id, d.id)} style={{ color: C.line }}>
-                <X size={14} />
-              </button>
+          {deliverableGroups.map((g, gi) => (
+            <div key={gi}>
+              {g.category && (
+                <div
+                  style={{ fontSize: 10, letterSpacing: '0.1em', color: C.teal, fontWeight: 700, marginTop: gi > 0 ? 14 : 0, marginBottom: 4 }}
+                  className="uppercase"
+                >
+                  {g.category}
+                </div>
+              )}
+              {g.items.map((d) => (
+                <div key={d.id} className="flex items-start gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.line}` }}>
+                  <button
+                    onClick={() => actions.toggleDeliverable(client.id, d.id)}
+                    className="shrink-0 rounded-md flex items-center justify-center"
+                    style={{ width: 20, height: 20, marginTop: 1, border: `1.5px solid ${d.done ? C.teal : C.line}`, background: d.done ? C.teal : 'transparent' }}
+                  >
+                    {d.done && <Check size={12} color={C.white} strokeWidth={3} />}
+                  </button>
+                  <span
+                    className="flex-1"
+                    style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
+                  >
+                    {d.text}
+                  </span>
+                  <button onClick={() => actions.deleteDeliverable(client.id, d.id)} style={{ color: C.line }}>
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
             </div>
           ))}
 
@@ -218,7 +243,7 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
                     {g.items.map((s) => (
                       <button
                         key={s.code}
-                        onClick={() => actions.addDeliverables(client.id, s.steps)}
+                        onClick={() => actions.addDeliverables(client.id, s.steps, s.name)}
                         className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left"
                         style={{ border: `1px solid ${C.line}` }}
                       >
