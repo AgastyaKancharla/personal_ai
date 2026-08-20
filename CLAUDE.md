@@ -89,3 +89,23 @@ library — Tailwind is present but used sparingly (layout utilities only).
 - `tracker_state` and `parse_log` are normal, unnormalised Supabase tables (Phase 0.2 —
   splitting `clients`/`tasks` into real tables — is deliberately deferred; see
   `docs/persona-brain-spec.md`'s Amendments).
+
+## Hard constraints
+
+- Never call api.anthropic.com from the browser — server routes only.
+- A failed read must never overwrite good data with empty state; write only after a
+  confirmed successful read. This bug has destroyed user data twice on this project.
+- One shared, versioned action schema imported by app, parser, and any training data.
+- Engine order: rules first (free, instant, offline) → API fallback only below 0.6
+  confidence → API must be deletable without touching calling code. Every parse is logged
+  regardless of engine.
+- Indian conventions: ₹ with en-IN grouping, 25k = 25000, 1.5L = 150000, dates DD/MM,
+  relative dates resolve forward.
+- Auth is a password + HMAC cookie with a server-only service-role Supabase client and
+  zero RLS policies. This is deliberate — do not migrate to Supabase Auth.
+
+## Current state
+
+Phase 0.1 auth is complete by design; Phase 0.2 schema normalisation is deferred, the
+`tracker_state` blob stays; Phases 1–2 (rules engine + parse logging) are the active work;
+Phases 3–5 are not started.
