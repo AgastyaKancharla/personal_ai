@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronLeft, Check, Trash2, X, Plus } from 'lucide-react';
+import { ChevronLeft, Check, Trash2, X, Plus, Upload, Loader2 } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { STAGES, stageIndex, CATALOGUE } from '@/lib/catalogue';
 import { inr } from '@/lib/dates';
@@ -9,12 +9,22 @@ import { Client } from '@/lib/types';
 import { Actions } from '@/lib/actions';
 import { Eyebrow } from './Primitives';
 
-type Mode = 'one' | 'paste' | 'tpl';
+type Mode = 'one' | 'paste' | 'tpl' | 'upload';
+
+interface ReviewItem {
+  include: boolean;
+  text: string;
+  price: string;
+  deadline: string;
+}
 
 export function ClientSheet({ client, actions, onClose }: { client: Client; actions: Actions; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>('one');
   const [one, setOne] = useState('');
   const [paste, setPaste] = useState('');
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [uploadError, setUploadError] = useState('');
+  const [reviewItems, setReviewItems] = useState<ReviewItem[] | null>(null);
   const total = client.deliverables.length;
   const built = client.deliverables.filter((d) => d.done).length;
   const balance = Math.max(0, (Number(client.quoteValue) || 0) - (Number(client.advance) || 0));
@@ -37,8 +47,40 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
       .split('\n')
       .map((l) => l.replace(/^[\s•\-–*]*\d*[.)]?\s*/, '').trim())
       .filter((l) => l.length > 2 && l.length < 160 && !/^(total|subtotal|gst|amount|₹|rs\.?)\b/i.test(l));
-    if (lines.length) actions.addDeliverables(client.id, lines);
+    if (lines.length) actions.addDeliverables(client.id, lines.map((text) => ({ text })));
     setPaste('');
+  };
+
+  const uploadQuoteDoc = async (file: File) => {
+    setUploadStatus('loading');
+    setUploadError('');
+    setReviewItems(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch('/api/quote-doc', { method: 'POST', body });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'Could not read that file.');
+      const items: { text: string; price?: string; deadline?: string }[] = out.items || [];
+      if (!items.length) throw new Error('Nothing recognizable in that file — try Paste quote instead.');
+      setReviewItems(items.map((it) => ({ include: true, text: it.text, price: it.price || '', deadline: it.deadline || '' })));
+      setUploadStatus('idle');
+    } catch (e: any) {
+      setUploadStatus('error');
+      setUploadError(e.message || 'Could not read that file.');
+    }
+  };
+
+  const commitReviewed = () => {
+    if (!reviewItems) return;
+    const chosen = reviewItems.filter((it) => it.include && it.text.trim());
+    if (chosen.length) {
+      actions.addDeliverables(
+        client.id,
+        chosen.map((it) => ({ text: it.text.trim(), price: it.price.trim() || undefined, deadline: it.deadline.trim() || undefined }))
+      );
+    }
+    setReviewItems(null);
   };
 
   return (
@@ -155,11 +197,17 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
                   >
                     {d.done && <Check size={12} color={C.white} strokeWidth={3} />}
                   </button>
-                  <span
-                    className="flex-1"
-                    style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
-                  >
-                    {d.text}
+                  <span className="flex-1">
+                    <span
+                      style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
+                    >
+                      {d.text}
+                    </span>
+                    {(d.price || d.deadline) && (
+                      <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>
+                        {[d.price, d.deadline].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
                   </span>
                   <button onClick={() => actions.deleteDeliverable(client.id, d.id)} style={{ color: C.line }}>
                     <X size={14} />
@@ -174,7 +222,8 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
               [
                 ['one', 'Add one'],
                 ['paste', 'Paste quote'],
-                ['tpl', 'Templates']
+                ['tpl', 'Templates'],
+                ['upload', 'Upload doc']
               ] as [Mode, string][]
             ).map(([k, l]) => (
               <button
@@ -195,7 +244,7 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
                 onChange={(e) => setOne(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && one.trim()) {
-                    actions.addDeliverables(client.id, [one.trim()]);
+                    actions.addDeliverables(client.id, [{ text: one.trim() }]);
                     setOne('');
                   }
                 }}
@@ -206,7 +255,7 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
               <button
                 onClick={() => {
                   if (one.trim()) {
-                    actions.addDeliverables(client.id, [one.trim()]);
+                    actions.addDeliverables(client.id, [{ text: one.trim() }]);
                     setOne('');
                   }
                 }}
@@ -243,7 +292,7 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
                     {g.items.map((s) => (
                       <button
                         key={s.code}
-                        onClick={() => actions.addDeliverables(client.id, s.steps, s.name)}
+                        onClick={() => actions.addDeliverables(client.id, s.steps.map((text) => ({ text })), s.name)}
                         className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left"
                         style={{ border: `1px solid ${C.line}` }}
                       >
@@ -257,6 +306,107 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {mode === 'upload' && (
+            <div>
+              {!reviewItems && (
+                <label
+                  className="w-full flex flex-col items-center justify-center gap-2 rounded-xl cursor-pointer"
+                  style={{ height: 96, border: `1px dashed ${C.line}`, color: C.muted }}
+                >
+                  {uploadStatus === 'loading' ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Upload size={18} />
+                  )}
+                  <span style={{ fontSize: 12.5 }}>
+                    {uploadStatus === 'loading' ? 'Reading the file…' : 'Tap to upload a quote (PDF or Word)'}
+                  </span>
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    className="hidden"
+                    disabled={uploadStatus === 'loading'}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) uploadQuoteDoc(file);
+                    }}
+                  />
+                </label>
+              )}
+              {uploadStatus === 'error' && (
+                <div style={{ fontSize: 12, color: C.orange, marginTop: 8 }}>{uploadError}</div>
+              )}
+              {reviewItems && (
+                <div>
+                  <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>
+                    Nothing&apos;s saved yet — review what got pulled out, fix anything wrong, uncheck what shouldn&apos;t be here.
+                  </div>
+                  <div className="space-y-2" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                    {reviewItems.map((it, i) => (
+                      <div key={i} className="flex items-start gap-2 rounded-xl p-2.5" style={{ border: `1px solid ${C.line}` }}>
+                        <button
+                          onClick={() =>
+                            setReviewItems((cur) => cur!.map((x, xi) => (xi === i ? { ...x, include: !x.include } : x)))
+                          }
+                          className="shrink-0 rounded-md flex items-center justify-center"
+                          style={{ width: 20, height: 20, marginTop: 1, border: `1.5px solid ${it.include ? C.teal : C.line}`, background: it.include ? C.teal : 'transparent' }}
+                        >
+                          {it.include && <Check size={12} color={C.white} strokeWidth={3} />}
+                        </button>
+                        <div className="flex-1 space-y-1.5">
+                          <input
+                            value={it.text}
+                            onChange={(e) =>
+                              setReviewItems((cur) => cur!.map((x, xi) => (xi === i ? { ...x, text: e.target.value } : x)))
+                            }
+                            className="w-full rounded-lg px-2 outline-none"
+                            style={{ height: 30, fontSize: 12.5, border: `1px solid ${C.line}`, color: C.ink }}
+                          />
+                          <div className="flex gap-1.5">
+                            <input
+                              value={it.price}
+                              onChange={(e) =>
+                                setReviewItems((cur) => cur!.map((x, xi) => (xi === i ? { ...x, price: e.target.value } : x)))
+                              }
+                              placeholder="Price"
+                              className="flex-1 rounded-lg px-2 outline-none"
+                              style={{ height: 26, fontSize: 11.5, border: `1px solid ${C.line}`, color: C.muted }}
+                            />
+                            <input
+                              value={it.deadline}
+                              onChange={(e) =>
+                                setReviewItems((cur) => cur!.map((x, xi) => (xi === i ? { ...x, deadline: e.target.value } : x)))
+                              }
+                              placeholder="Deadline"
+                              className="flex-1 rounded-lg px-2 outline-none"
+                              style={{ height: 26, fontSize: 11.5, border: `1px solid ${C.line}`, color: C.muted }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => setReviewItems(null)}
+                      className="rounded-xl"
+                      style={{ height: 40, padding: '0 16px', border: `1px solid ${C.line}`, color: C.muted, fontSize: 13.5, fontWeight: 600 }}
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={commitReviewed}
+                      className="flex-1 rounded-xl"
+                      style={{ height: 40, background: C.teal, color: C.white, fontSize: 13.5, fontWeight: 600 }}
+                    >
+                      Add {reviewItems.filter((it) => it.include).length} to checklist
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
