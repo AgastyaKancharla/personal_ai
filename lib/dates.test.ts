@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { monthRange, nextRecurrenceDate, todayRange, weekRange } from './dates';
+import { byTimeline, formatTime, monthRange, nextRecurrenceDate, todayRange, weekRange } from './dates';
 
 // Fixed base so every case is deterministic — a Wednesday, matching the
 // convention used across lib/parse's own test fixtures.
@@ -62,5 +62,32 @@ describe('nextRecurrenceDate', () => {
 
   it('monthly crosses a year boundary from December', () => {
     expect(nextRecurrenceDate('2026-12-15', 'monthly')).toBe('2027-01-15');
+  });
+});
+
+describe('formatTime', () => {
+  it('formats a morning time', () => {
+    expect(formatTime('09:05')).toBe('9:05 AM');
+  });
+
+  it('formats noon and midnight correctly', () => {
+    expect(formatTime('12:00')).toBe('12:00 PM');
+    expect(formatTime('00:00')).toBe('12:00 AM');
+  });
+
+  it('formats an afternoon time', () => {
+    expect(formatTime('14:30')).toBe('2:30 PM');
+  });
+});
+
+describe('byTimeline', () => {
+  it('sorts timed tasks chronologically ahead of untimed ones', () => {
+    const items = [{ id: 'c', time: undefined }, { id: 'a', time: '09:00' }, { id: 'b', time: '08:00' }];
+    expect(items.sort(byTimeline).map((i) => i.id)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('falls back to important-first ordering among untimed tasks', () => {
+    const items = [{ id: 'a', important: false }, { id: 'b', important: true }];
+    expect(items.sort(byTimeline).map((i) => i.id)).toEqual(['b', 'a']);
   });
 });

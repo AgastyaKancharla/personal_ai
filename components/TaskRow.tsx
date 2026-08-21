@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Pencil, Repeat, Star, Trash2 } from 'lucide-react';
+import { Check, Clock, Pencil, Repeat, Star, Trash2 } from 'lucide-react';
 import { C } from '@/lib/theme';
+import { formatTime } from '@/lib/dates';
 import { Client, RecurrenceFreq, Task } from '@/lib/types';
 
 export function TaskRow({
@@ -19,7 +20,7 @@ export function TaskRow({
   clients?: Client[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
-  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence'>>) => void;
+  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time'>>) => void;
   overdue?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -27,18 +28,26 @@ export function TaskRow({
   const [date, setDate] = useState(task.date);
   const [clientId, setClientId] = useState(task.clientId || '');
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>(task.recurrence?.freq || '');
+  const [time, setTime] = useState(task.time || '');
 
   const startEdit = () => {
     setTitle(task.title);
     setDate(task.date);
     setClientId(task.clientId || '');
     setRepeat(task.recurrence?.freq || '');
+    setTime(task.time || '');
     setEditing(true);
   };
 
   const save = () => {
     if (!title.trim() || !onUpdate) return;
-    onUpdate(task.id, { title: title.trim(), date, clientId: clientId || null, recurrence: repeat ? { freq: repeat } : undefined });
+    onUpdate(task.id, {
+      title: title.trim(),
+      date,
+      clientId: clientId || null,
+      recurrence: repeat ? { freq: repeat } : undefined,
+      time: time || undefined
+    });
     setEditing(false);
   };
 
@@ -60,6 +69,15 @@ export function TaskRow({
             className="flex-1 rounded-xl px-2 outline-none"
             style={{ fontSize: 12, height: 36, minWidth: 0, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
           />
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            className="flex-1 rounded-xl px-2 outline-none"
+            style={{ fontSize: 12, height: 36, minWidth: 0, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+          />
+        </div>
+        <div className="flex gap-2">
           {clients && clients.length > 0 && (
             <select
               value={clientId}
@@ -113,6 +131,12 @@ export function TaskRow({
           {task.title}
         </div>
         <div className="flex items-center gap-2 mt-1">
+          {task.time && (
+            <span className="flex items-center gap-1" style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>
+              <Clock size={10} />
+              {formatTime(task.time)}
+            </span>
+          )}
           {client && <span style={{ fontSize: 11, color: C.teal, fontWeight: 600 }}>{client.name}</span>}
           {task.recurrence && (
             <span className="flex items-center gap-1" style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>

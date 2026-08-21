@@ -5,10 +5,10 @@ import { nextRecurrenceDate, uid } from './dates';
 export type SetState = (updater: (d: TrackerState) => TrackerState) => void;
 
 export interface Actions {
-  addTask: (title: string, clientId: string | null, date: string, recurrence?: Task['recurrence']) => void;
+  addTask: (title: string, clientId: string | null, date: string, recurrence?: Task['recurrence'], time?: string) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
-  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence'>>) => void;
+  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time'>>) => void;
   addClient: (name: string, phone: string) => void;
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -33,7 +33,7 @@ export function makeActions(data: TrackerState, setData: SetState, openClientId:
   };
 
   return {
-    addTask: (title, clientId, date, recurrence) => run({ type: 'addTask', id: uid(), title, clientId, date, recurrence }),
+    addTask: (title, clientId, date, recurrence, time) => run({ type: 'addTask', id: uid(), title, clientId, date, recurrence, time }),
 
     // Reads the pre-toggle task from the current render's `data` (not from
     // inside setData's updater — that can run more than once, e.g. under

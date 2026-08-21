@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { Phone } from 'lucide-react';
 import { C, DISPLAY, BODY } from '@/lib/theme';
 import { STAGES, stageIndex } from '@/lib/catalogue';
-import { DOW, MONTHS, today } from '@/lib/dates';
+import { DOW, MONTHS, byTimeline, today } from '@/lib/dates';
 import { TrackerState } from '@/lib/types';
 import { Actions } from '@/lib/actions';
 import { Card, Empty, Eyebrow } from './Primitives';
@@ -14,9 +14,10 @@ import { AddTask } from './AddTask';
 export function TodayView({ data, actions }: { data: TrackerState; actions: Actions }) {
   const t = today();
   const byId = useMemo(() => Object.fromEntries(data.clients.map((c) => [c.id, c])), [data.clients]);
-  const byImportant = (a: { important?: boolean }, b: { important?: boolean }) => Number(b.important) - Number(a.important);
-  const todays = data.tasks.filter((x) => x.date === t).sort(byImportant);
-  const overdue = data.tasks.filter((x) => x.date < t && !x.done).sort(byImportant);
+  // Timed tasks lead the day's list, chronologically; untimed tasks follow,
+  // ranked by the `important` flag — the order a day actually runs in.
+  const todays = data.tasks.filter((x) => x.date === t).sort(byTimeline);
+  const overdue = data.tasks.filter((x) => x.date < t && !x.done).sort(byTimeline);
   const followUps = data.clients.filter((c) => c.nextFollowUp && c.nextFollowUp <= t && c.stage !== 'delivered');
   const d = new Date();
   const done = todays.filter((x) => x.done).length;

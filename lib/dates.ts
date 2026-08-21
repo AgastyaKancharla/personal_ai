@@ -53,6 +53,27 @@ export const monthRange = (offsetMonths = 0, base: Date = new Date()): DateRange
   return { startIso: iso(first), endIso: iso(last) };
 };
 
+// A day's tasks in the order the day actually runs in: timed tasks lead,
+// chronologically, then untimed tasks follow ranked by the `important`
+// flag — the same ordering TodayView and WeekView both want for a day's
+// list, factored out once rather than duplicated per component.
+export const byTimeline = (a: { time?: string; important?: boolean }, b: { time?: string; important?: boolean }): number => {
+  if (a.time && b.time) return a.time.localeCompare(b.time);
+  if (a.time !== undefined && b.time === undefined) return -1;
+  if (a.time === undefined && b.time !== undefined) return 1;
+  return Number(b.important) - Number(a.important);
+};
+
+// "14:30" -> "2:30 PM". Formats a stored 24-hour HH:MM for display —
+// deliberately not locale-aware (this app is already fixed to Indian
+// conventions elsewhere), just 12-hour with AM/PM, the everyday reading.
+export const formatTime = (time: string): string => {
+  const [h, m] = time.split(':').map(Number);
+  const period = h < 12 ? 'AM' : 'PM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${pad(m)} ${period}`;
+};
+
 // Advances a recurring task's date by one period. Monthly clamps into the
 // target month (31 Jan -> 28/29 Feb, not a Date-rollover into March) so a
 // month-end task doesn't drift to a different day of the month over time.

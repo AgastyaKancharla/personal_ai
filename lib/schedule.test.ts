@@ -80,6 +80,18 @@ describe('summarizeRange', () => {
     expect(summary.followUpsDue.map((f) => f.clientId)).toEqual([due.id]);
   });
 
+  it('carries an optional time through to the summary', () => {
+    const state = stateWith({
+      tasks: [
+        { id: 't1', title: 'Timed', clientId: null, date: '2026-08-20', done: false, time: '09:30' },
+        { id: 't2', title: 'Untimed', clientId: null, date: '2026-08-20', done: false }
+      ]
+    });
+    const summary = summarizeRange(state, '2026-08-17', '2026-08-23', TODAY);
+    expect(summary.tasks.find((t) => t.id === 't1')!.time).toBe('09:30');
+    expect(summary.tasks.find((t) => t.id === 't2')!.time).toBeUndefined();
+  });
+
   it('returns an empty summary for an empty state', () => {
     const summary = summarizeRange(stateWith({}), '2026-08-17', '2026-08-23', TODAY);
     expect(summary.tasks).toEqual([]);

@@ -14,6 +14,12 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.tasks[0]).toEqual(before.tasks[0]);
   });
 
+  it('addTask carries an optional time through', () => {
+    const before = stateWith({ tasks: [] });
+    const after = applyOp(before, { type: 'addTask', id: 't1', title: 'Call', clientId: null, date: '2026-08-21', time: '09:30' });
+    expect(after.tasks[0].time).toBe('09:30');
+  });
+
   it('toggleTask flips only the named task', () => {
     const before = stateWith({
       tasks: [
@@ -36,6 +42,12 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { title: 'A, renamed', date: '2026-08-25' } });
     expect(after.tasks.find((t) => t.id === 't1')).toEqual({ id: 't1', title: 'A, renamed', clientId: null, date: '2026-08-25', done: false });
     expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
+  });
+
+  it('updateTask can patch the time alone, without touching other fields', () => {
+    const before = stateWith({ tasks: [{ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false }] });
+    const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { time: '15:00' } });
+    expect(after.tasks[0]).toEqual({ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false, time: '15:00' });
   });
 
   it('updateTask can patch the important flag alone, without touching other fields', () => {
@@ -63,8 +75,17 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
       clientId: null,
       date: '2026-08-20',
       done: false,
-      recurrence: { freq: 'daily' }
+      recurrence: { freq: 'daily' },
+      time: undefined
     });
+  });
+
+  it('toggleTask carries the completed task\'s time forward to its next occurrence', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Standup', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily' }, time: '09:00' }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks.find((t) => t.id === 't2')!.time).toBe('09:00');
   });
 
   it('toggleTask does not spawn anything for a non-recurring task', () => {

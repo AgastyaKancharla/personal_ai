@@ -9,6 +9,7 @@ export interface ScheduleTaskSummary {
   clientId: string | null;
   clientName: string | null;
   important?: boolean;
+  time?: string;
 }
 
 export interface FollowUpSummary {
@@ -46,7 +47,8 @@ export function summarizeRange(state: TrackerState, startIso: string, endIso: st
     done: t.done,
     clientId: t.clientId,
     clientName: t.clientId ? byId.get(t.clientId)?.name ?? null : null,
-    important: t.important
+    important: t.important,
+    time: t.time
   });
 
   const tasks = state.tasks

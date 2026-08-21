@@ -68,6 +68,11 @@ export interface Task {
   // separately — there is no "recurring task template" entity, just a
   // chain of ordinary tasks that happen to carry the same rule forward.
   recurrence?: Recurrence;
+  // 24-hour "HH:MM", e.g. "14:30" — the exact value a native <input
+  // type="time"> produces, so no parsing/formatting round-trip is needed
+  // to store or edit it. Undefined means "no particular time" (an anytime
+  // task), same optional-field convention as `important`/`recurrence`.
+  time?: string;
 }
 
 export interface TrackerState {

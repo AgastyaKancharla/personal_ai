@@ -12,7 +12,7 @@ export function AddTask({
 }: {
   date: string;
   clients: Client[];
-  onAdd: (title: string, clientId: string | null, date: string, recurrence?: { freq: RecurrenceFreq }) => void;
+  onAdd: (title: string, clientId: string | null, date: string, recurrence?: { freq: RecurrenceFreq }, time?: string) => void;
 }) {
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
@@ -21,13 +21,15 @@ export function AddTask({
   // without navigating to Week and expanding that specific day.
   const [taskDate, setTaskDate] = useState(date);
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>('');
+  const [time, setTime] = useState('');
 
   const submit = () => {
     if (!title.trim()) return;
-    onAdd(title.trim(), clientId || null, taskDate, repeat ? { freq: repeat } : undefined);
+    onAdd(title.trim(), clientId || null, taskDate, repeat ? { freq: repeat } : undefined, time || undefined);
     setTitle('');
     setTaskDate(date);
     setRepeat('');
+    setTime('');
   };
 
   return (
@@ -53,6 +55,15 @@ export function AddTask({
           className="flex-1 rounded-xl px-2 outline-none"
           style={{ fontSize: 12, height: 38, background: C.white, border: `1px solid ${C.line}`, color: C.ink, minWidth: 0 }}
         />
+        <input
+          type="time"
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+          className="flex-1 rounded-xl px-2 outline-none"
+          style={{ fontSize: 12, height: 38, background: C.white, border: `1px solid ${C.line}`, color: C.ink, minWidth: 0 }}
+        />
+      </div>
+      <div className="flex gap-2">
         {clients.length > 0 && (
           <select
             value={clientId}
