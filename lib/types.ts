@@ -65,6 +65,12 @@ export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly';
 
 export interface Recurrence {
   freq: RecurrenceFreq;
+  // Last date this should still spawn a next occurrence for (inclusive).
+  // Undefined repeats forever, same as before this existed. Checked
+  // against the *next* occurrence's date, not the one being completed —
+  // "repeat daily through the 28th" still creates the task dated the
+  // 28th, it just doesn't spawn a 29th.
+  until?: string;
 }
 
 export interface Task {

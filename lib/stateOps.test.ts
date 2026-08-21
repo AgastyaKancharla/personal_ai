@@ -88,6 +88,28 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.tasks.find((t) => t.id === 't2')!.time).toBe('09:00');
   });
 
+  it('toggleTask spawns the next occurrence when it is still within the recurrence\'s until bound', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'Daily check-in', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily', until: '2026-08-25' } }
+      ]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(2);
+    expect(after.tasks.find((t) => t.id === 't2')).toBeTruthy();
+  });
+
+  it('toggleTask does not spawn a next occurrence past the recurrence\'s until bound', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'Daily check-in', clientId: null, date: '2026-08-25', done: false, recurrence: { freq: 'daily', until: '2026-08-25' } }
+      ]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-26' } });
+    expect(after.tasks).toHaveLength(1);
+    expect(after.tasks[0].done).toBe(true);
+  });
+
   it('toggleTask does not spawn anything for a non-recurring task', () => {
     const before = stateWith({ tasks: [{ id: 't1', title: 'One-off', clientId: null, date: '2026-08-19', done: false }] });
     const after = applyOp(before, { type: 'toggleTask', id: 't1' });

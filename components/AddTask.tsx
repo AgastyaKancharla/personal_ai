@@ -3,7 +3,14 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { C } from '@/lib/theme';
+import { addDays, iso, parseIso } from '@/lib/dates';
 import { Client, RecurrenceFreq } from '@/lib/types';
+
+const END_PRESETS: [string, number][] = [
+  ['1 week', 6],
+  ['2 weeks', 13],
+  ['1 month', 29]
+];
 
 export function AddTask({
   date,
@@ -12,7 +19,14 @@ export function AddTask({
 }: {
   date: string;
   clients: Client[];
-  onAdd: (title: string, clientId: string | null, date: string, recurrence?: { freq: RecurrenceFreq }, time?: string, tags?: string[]) => void;
+  onAdd: (
+    title: string,
+    clientId: string | null,
+    date: string,
+    recurrence?: { freq: RecurrenceFreq; until?: string },
+    time?: string,
+    tags?: string[]
+  ) => void;
 }) {
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
@@ -21,6 +35,7 @@ export function AddTask({
   // without navigating to Week and expanding that specific day.
   const [taskDate, setTaskDate] = useState(date);
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>('');
+  const [until, setUntil] = useState('');
   const [time, setTime] = useState('');
   const [tagsInput, setTagsInput] = useState('');
 
@@ -30,10 +45,18 @@ export function AddTask({
       .split(',')
       .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
-    onAdd(title.trim(), clientId || null, taskDate, repeat ? { freq: repeat } : undefined, time || undefined, tags.length ? tags : undefined);
+    onAdd(
+      title.trim(),
+      clientId || null,
+      taskDate,
+      repeat ? { freq: repeat, until: until || undefined } : undefined,
+      time || undefined,
+      tags.length ? tags : undefined
+    );
     setTitle('');
     setTaskDate(date);
     setRepeat('');
+    setUntil('');
     setTime('');
     setTagsInput('');
   };
@@ -97,6 +120,31 @@ export function AddTask({
           <option value="monthly">Monthly</option>
         </select>
       </div>
+      {repeat && (
+        <div className="flex gap-1.5 items-center flex-wrap">
+          <span style={{ fontSize: 11, color: C.muted }}>Ends</span>
+          {END_PRESETS.map(([label, days]) => (
+            <button
+              key={label}
+              onClick={() => setUntil(iso(addDays(parseIso(taskDate), days)))}
+              className="rounded-lg px-2 py-1"
+              style={{ fontSize: 11, fontWeight: 600, background: C.paper, color: C.muted }}
+            >
+              {label}
+            </button>
+          ))}
+          <button onClick={() => setUntil('')} className="rounded-lg px-2 py-1" style={{ fontSize: 11, fontWeight: 600, background: C.paper, color: C.muted }}>
+            No end
+          </button>
+          <input
+            type="date"
+            value={until}
+            onChange={(e) => setUntil(e.target.value)}
+            className="rounded-lg px-2 outline-none"
+            style={{ fontSize: 11, height: 28, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+          />
+        </div>
+      )}
       <input
         value={tagsInput}
         onChange={(e) => setTagsInput(e.target.value)}

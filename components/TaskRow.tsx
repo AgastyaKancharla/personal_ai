@@ -3,8 +3,14 @@
 import { useState } from 'react';
 import { Check, Clock, Pencil, Repeat, Star, Trash2 } from 'lucide-react';
 import { C } from '@/lib/theme';
-import { formatTime } from '@/lib/dates';
+import { addDays, formatTime, iso, parseIso } from '@/lib/dates';
 import { Client, RecurrenceFreq, Task } from '@/lib/types';
+
+const END_PRESETS: [string, number][] = [
+  ['1 week', 6],
+  ['2 weeks', 13],
+  ['1 month', 29]
+];
 
 export function TaskRow({
   task,
@@ -28,6 +34,7 @@ export function TaskRow({
   const [date, setDate] = useState(task.date);
   const [clientId, setClientId] = useState(task.clientId || '');
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>(task.recurrence?.freq || '');
+  const [until, setUntil] = useState(task.recurrence?.until || '');
   const [time, setTime] = useState(task.time || '');
   const [tagsInput, setTagsInput] = useState((task.tags || []).join(', '));
 
@@ -36,6 +43,7 @@ export function TaskRow({
     setDate(task.date);
     setClientId(task.clientId || '');
     setRepeat(task.recurrence?.freq || '');
+    setUntil(task.recurrence?.until || '');
     setTime(task.time || '');
     setTagsInput((task.tags || []).join(', '));
     setEditing(true);
@@ -51,7 +59,7 @@ export function TaskRow({
       title: title.trim(),
       date,
       clientId: clientId || null,
-      recurrence: repeat ? { freq: repeat } : undefined,
+      recurrence: repeat ? { freq: repeat, until: until || undefined } : undefined,
       time: time || undefined,
       tags: tags.length ? tags : undefined
     });
@@ -112,6 +120,31 @@ export function TaskRow({
             <option value="monthly">Monthly</option>
           </select>
         </div>
+        {repeat && (
+          <div className="flex gap-1.5 items-center flex-wrap">
+            <span style={{ fontSize: 11, color: C.muted }}>Ends</span>
+            {END_PRESETS.map(([label, days]) => (
+              <button
+                key={label}
+                onClick={() => setUntil(iso(addDays(parseIso(date), days)))}
+                className="rounded-lg px-2 py-1"
+                style={{ fontSize: 11, fontWeight: 600, background: C.paper, color: C.muted }}
+              >
+                {label}
+              </button>
+            ))}
+            <button onClick={() => setUntil('')} className="rounded-lg px-2 py-1" style={{ fontSize: 11, fontWeight: 600, background: C.paper, color: C.muted }}>
+              No end
+            </button>
+            <input
+              type="date"
+              value={until}
+              onChange={(e) => setUntil(e.target.value)}
+              className="rounded-lg px-2 outline-none"
+              style={{ fontSize: 11, height: 28, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+            />
+          </div>
+        )}
         <input
           value={tagsInput}
           onChange={(e) => setTagsInput(e.target.value)}
@@ -157,6 +190,7 @@ export function TaskRow({
             <span className="flex items-center gap-1" style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>
               <Repeat size={10} />
               {task.recurrence.freq}
+              {task.recurrence.until ? ` until ${task.recurrence.until.slice(8)}/${task.recurrence.until.slice(5, 7)}` : ''}
             </span>
           )}
           {overdue && (

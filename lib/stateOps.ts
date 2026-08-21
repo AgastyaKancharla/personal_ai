@@ -167,11 +167,20 @@ export function applyOp(state: TrackerState, op: Operation): TrackerState {
       const target = state.tasks.find((t) => t.id === op.id);
       const toggled = state.tasks.map((t) => (t.id === op.id ? { ...t, done: !t.done } : t));
       // Only spawns the next occurrence on the false->true transition (not
-      // on un-completing one), and only when the caller supplied the next
-      // id/date to use — same pre-generated-id convention as every other
+      // on un-completing one), only when the caller supplied the next
+      // id/date to use (same pre-generated-id convention as every other
       // operation here, so the client's optimistic apply and the server's
-      // authoritative apply create the identical task.
-      if (target && !target.done && target.recurrence && op.nextOccurrence) {
+      // authoritative apply create the identical task), and only while
+      // that next date is still within the recurrence's `until` bound —
+      // this is what makes a recurrence actually stop instead of running
+      // forever.
+      if (
+        target &&
+        !target.done &&
+        target.recurrence &&
+        op.nextOccurrence &&
+        (!target.recurrence.until || op.nextOccurrence.date <= target.recurrence.until)
+      ) {
         return {
           ...state,
           tasks: [
