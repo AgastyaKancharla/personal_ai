@@ -131,6 +131,18 @@ export default function Home() {
       const toSend = pendingOps.current;
       if (!toSend.length) return;
       pendingOps.current = [];
+      // Clear localStorage's copy right now, before the request even goes
+      // out — not after it succeeds. Otherwise there's a window, as long
+      // as the whole round trip, where localStorage still says "these
+      // ops are pending" while they may already be in flight or even
+      // landed server-side; a tab killed mid-request (common on mobile
+      // under battery pressure) leaves that stale flag behind, and the
+      // next load replays the batch on top of the server's real current
+      // state — resurrecting a task that was already deleted, then
+      // re-sending the resurrection right back to the server. If this
+      // request does fail, the catch block below restores both the ref
+      // and localStorage together, so nothing here is silently dropped.
+      persistOps([]);
 
       try {
         const res = await fetch('/api/data/ops', {
