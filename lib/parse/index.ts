@@ -40,6 +40,21 @@ function stripClientName(item: string, clientName: string | null): string {
   return stripped || item;
 }
 
+// A generic fallback task title (built from whatever text nothing else
+// consumed) commonly ends with a dangling connector word once its date
+// phrase is removed ("follow up with X next week" -> "follow up with"),
+// same shape of leftover as stripClientName above deals with.
+function trimConnectors(s: string): string {
+  return s.replace(/^(for|to|from|with|and)\s+/i, '').replace(/\s+(for|to|from|with|and|the|a|an)$/i, '').trim();
+}
+
+// An explicit task-intent prefix is a complete, unambiguous claim on its
+// own — no date needed to know what the user means. "task"/"todo" require
+// a colon or dash so an unrelated sentence that merely starts with that
+// word ("task force meeting tomorrow") doesn't false-match; "add task" and
+// "remind me to" are unambiguous phrases and don't need one.
+const TASK_PREFIX_RE = /^(?:add\s+task\b\s*[:\-]?\s*|task\s*[:\-]\s*|todo\s*[:\-]\s*|remind\s+me\s+to\s+)/i;
+
 function buildSummary(actions: Action[], clientName: string | null): string {
   if (actions.length === 0) return 'Nothing recognized';
   if (actions.length === 1) {
@@ -85,6 +100,9 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
   };
   let bonus = 0;
   const actions: Action[] = [];
+
+  const taskPrefixMatch = TASK_PREFIX_RE.exec(text);
+  if (taskPrefixMatch) claim([0, taskPrefixMatch[0].length]);
 
   // A batch declaration of brand-new clients ("3 clients A, B and C") is a
   // structurally different sentence from everything below — there's no
@@ -228,7 +246,37 @@ export function parse(text: string, ctx: ParseContext): ParseResult {
 
   const unconsumed = redact(text, consumed);
   const wordCount = unconsumed.length ? unconsumed.split(/\s+/).length : 0;
-  const penalty = Math.floor(wordCount / 5) * 0.1;
+  let penalty = Math.floor(wordCount / 5) * 0.1;
+
+  // Nothing above matched anything at all, but there's either a real date
+  // to act on, or an explicit task-intent prefix ("add task", "todo:",
+  // "remind me to") — rather than silently discarding an ordinary task
+  // ("speak with Neha about the picture today", "call the printer
+  // tomorrow", "add task visit a shop"), treat the rest of the sentence as
+  // the task's own title, defaulting to today when no date was given. This
+  // is a deliberately wider net than the rest of the engine: unlike money
+  // or a stage, a task is low-stakes and one-tap deletable, so occasionally
+  // auto-filing something that turns out not to be a task (e.g. "the
+  // package arrived today") is an acceptable trade for not silently
+  // dropping the far more common real one — a decision made explicitly,
+  // not a default. The leftover text is no longer noise once it becomes
+  // the thing the action is about, so it doesn't take the usual
+  // unconsumed-word penalty below.
+  if (actions.length === 0 && (date || taskPrefixMatch)) {
+    const title = trimConnectors(unconsumed);
+    if (title.length >= 3) {
+      actions.push({ type: 'task', title: capitalize(title), clientName, date: date ? date.date : ctx.today });
+      // An explicit prefix is a complete, unambiguous claim on its own —
+      // same full-strength credit the engine already gives a clean
+      // single-signal match (client alone, service alone) — so it clears
+      // the escalation threshold by itself, with no date or client needed.
+      // A bare date with no prefix is a weaker, inferred signal, so it
+      // keeps its existing lower credit.
+      bonus += taskPrefixMatch ? 0.6 : 0.4;
+      penalty = 0;
+    }
+  }
+
   const confidence = Math.max(0, Math.min(1, Math.min(bonus, 1) - penalty));
 
   return {

@@ -33,6 +33,15 @@ export interface DeliverableInput {
   deadline?: string;
 }
 
+export interface ActivityEntry {
+  id: string;
+  text: string;
+  // Full ISO timestamp (date + time), not just a date — unlike everything
+  // else in this app, an activity log entry is meaningful by time of day
+  // too ("called at 4pm" vs "called this morning").
+  at: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -45,6 +54,23 @@ export interface Client {
   nextFollowUp: string;
   createdAt: string;
   history: Partial<Record<StageKey, string>>;
+  // An append-only timestamped log ("called, said X", "sent revised
+  // quote") — separate from the single free-text `notes` box above, which
+  // stays a single overwritable scratchpad. Optional so every client
+  // created before this shipped reads the same as one with an empty log.
+  activityLog?: ActivityEntry[];
+}
+
+export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly';
+
+export interface Recurrence {
+  freq: RecurrenceFreq;
+  // Last date this should still spawn a next occurrence for (inclusive).
+  // Undefined repeats forever, same as before this existed. Checked
+  // against the *next* occurrence's date, not the one being completed —
+  // "repeat daily through the 28th" still creates the task dated the
+  // 28th, it just doesn't spawn a 29th.
+  until?: string;
 }
 
 export interface Task {
@@ -53,6 +79,24 @@ export interface Task {
   clientId: string | null;
   date: string;
   done: boolean;
+  // A single flag, not a priority scale — covers "this one matters more"
+  // without inventing a sort hierarchy nobody asked for. Undefined reads
+  // the same as false.
+  important?: boolean;
+  // When set, completing this task spawns its next occurrence (see
+  // applyOp's toggleTask case) rather than the series being tracked
+  // separately — there is no "recurring task template" entity, just a
+  // chain of ordinary tasks that happen to carry the same rule forward.
+  recurrence?: Recurrence;
+  // 24-hour "HH:MM", e.g. "14:30" — the exact value a native <input
+  // type="time"> produces, so no parsing/formatting round-trip is needed
+  // to store or edit it. Undefined means "no particular time" (an anytime
+  // task), same optional-field convention as `important`/`recurrence`.
+  time?: string;
+  // Free-form, lowercase, user-typed labels (e.g. "personal", "gym") —
+  // mainly for tasks with no client to hang off of. No separate tag
+  // registry; a tag is just whatever string appears across tasks.
+  tags?: string[];
 }
 
 export interface TrackerState {

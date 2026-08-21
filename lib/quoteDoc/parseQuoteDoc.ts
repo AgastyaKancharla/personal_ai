@@ -4,6 +4,7 @@ export interface QuoteDocItem {
   text: string;
   price?: string;
   deadline?: string;
+  category?: string;
 }
 
 export interface QuoteDocResult {
@@ -67,9 +68,11 @@ function findDeadline(line: string): string | null {
 }
 
 // Lines that are structurally never a deliverable — page furniture,
-// totals, contact details, section headers, signature blocks.
+// totals, contact details, section headers, signature blocks. The
+// AgastyaOne-specific headings are included here too as a second layer of
+// defense in case the template-aware path below over/under-shoots.
 const SKIP_LINE =
-  /^(page \d+( of \d+)?|total|subtotal|grand total|gst|tax\b|amount\b|terms( and conditions)?|signature|prepared by|contact|to:|from:|date:|www\.|https?:)/i;
+  /^(page \d+( of \d+)?|total|subtotal|grand total|gst|tax\b|amount\b|terms( and conditions)?|signature|prepared by|contact|to:|from:|date:|www\.|https?:|investment summary|beyond this quote|what happens next|what we're fixing|payment terms|terms & validity|acceptance|valid until|prepared for)/i;
 const CONTACT_LINE = /^[\w.+-]+@[\w-]+\.[a-z]{2,}$|^\+?\d[\d\s-]{7,}$/i;
 
 // A full prose sentence (long, ends with a period) reads as terms
@@ -82,14 +85,165 @@ function looksLikeProse(line: string): boolean {
 
 const MAX_ITEMS = 60;
 
+// --- AgastyaOne quote template — anchor-based extraction -------------------
+//
+// generate_quote.js (the agastyaone-quote skill) always emits a service's
+// scope as a service-name line, then a two-column table whose cells are
+// titled literally "Setup Includes" and "Every Month" with bullet items
+// under each — confirmed against a real generated document, not guessed.
+// There is no per-item price or deadline anywhere in this template: price
+// only exists at service level in "Investment Summary" (a table with one
+// row per service — present whether there's 1 service or many — plus
+// price cards when there's exactly 1, which duplicate the same numbers).
+// Anchoring on the literal "Setup Includes"/"Every Month" markers sidesteps
+// the whole "is this short line a heading or a real item" problem that a
+// per-line blacklist can never fully solve.
+
+const SCOPE_MARKERS = ['setup includes', 'every month'];
+const STOP_HEADINGS = [
+  'investment summary',
+  "what we're fixing",
+  'beyond this quote',
+  'what happens next',
+  'payment terms',
+  'terms & validity',
+  'acceptance'
+];
+
+// The second scope column isn't always literally titled "Every Month" —
+// a one-time engagement with no monthly retainer instead labels it
+// something like "Included Free — Months 1 to 4" (confirmed against a
+// second real generated document). Match that by prefix since the exact
+// month range varies; "Every Month" stays as its own exact check since
+// that's the only other real-world variant seen so far.
+const INCLUDED_FREE_RE = /^included free\b/i;
+function isSecondColumnMarker(lower: string): boolean {
+  return lower === 'every month' || INCLUDED_FREE_RE.test(lower);
+}
+
+function isBoundary(lower: string): boolean {
+  return lower === 'setup includes' || isSecondColumnMarker(lower) || STOP_HEADINGS.some((h) => lower.startsWith(h));
+}
+
+interface TemplateItem {
+  text: string;
+  category?: string;
+}
+
+function extractAgastyaOneScope(rawLines: string[]): TemplateItem[] | null {
+  const lower = rawLines.map((l) => l.toLowerCase());
+  if (!lower.some((l) => SCOPE_MARKERS.includes(l))) return null;
+
+  // A scope-bullet run also ends the moment the *next* line is itself a
+  // "Setup Includes" marker (a new service always starts there, never with
+  // "Every Month"/"Included Free") — that current line is really the next
+  // service's subheading, not a bullet, and must be left for the outer loop
+  // to consume so it can be captured as that next service's category.
+  //
+  // When a new top-level section starts, generate_quote.js also emits a
+  // broader section-heading line *before* that subheading (confirmed
+  // against a real multi-section document) — two non-bullet lines back
+  // instead of one. There's no reliable text-only signal to tell that
+  // heading apart from a genuine short bullet at the same position (a
+  // service with no section change has a real bullet there instead), so
+  // this deliberately doesn't try to strip it: a stray section-heading line
+  // occasionally landing in the previous service's group, with that
+  // group's price, is an easy, obvious thing to spot and uncheck on the
+  // mandatory review screen — silently dropping a real bullet instead would
+  // not be. Same "never guess past what the text actually tells you" rule
+  // as the rest of this parser.
+  const runContinues = (idx: number) => !isBoundary(lower[idx]) && !(idx + 1 < rawLines.length && lower[idx + 1] === 'setup includes');
+
+  const items: TemplateItem[] = [];
+  let currentCategory: string | undefined;
+  let i = 0;
+  while (i < rawLines.length) {
+    if (lower[i] === 'setup includes') {
+      // The service-name subheading always immediately precedes "Setup
+      // Includes" in this template — confirmed against real output.
+      const prev = rawLines[i - 1];
+      if (prev && !isBoundary(lower[i - 1])) currentCategory = prev;
+      i++;
+      while (i < rawLines.length && runContinues(i)) {
+        items.push({ text: rawLines[i], category: currentCategory });
+        i++;
+      }
+    } else if (isSecondColumnMarker(lower[i])) {
+      // "Every Month" / "Included Free — Months …" is the second column of
+      // the same row — reuse whichever service's "Setup Includes" we just
+      // saw, not whatever line happens to precede it (that's the last
+      // Setup Includes bullet).
+      i++;
+      while (i < rawLines.length && runContinues(i)) {
+        items.push({ text: rawLines[i], category: currentCategory });
+        i++;
+      }
+    } else {
+      i++;
+    }
+  }
+  return items;
+}
+
+// Investment Summary always lists one row per service — "Service name"
+// followed within a line or two by its one-time price — whether there's a
+// single service (where price cards also appear, duplicating the same
+// number) or several. Match each category name found by the scope
+// extraction above against that table, rather than trying to distinguish
+// the two layouts.
+function resolveServicePrices(rawLines: string[], lower: string[], categories: string[]): Map<string, string> {
+  const prices = new Map<string, string>();
+  const startIdx = lower.findIndex((l) => l.startsWith('investment summary'));
+  if (startIdx === -1) return prices;
+  let endIdx = rawLines.length;
+  for (let i = startIdx + 1; i < rawLines.length; i++) {
+    if (STOP_HEADINGS.some((h) => h !== 'investment summary' && lower[i].startsWith(h))) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  for (const category of categories) {
+    const catLower = category.toLowerCase();
+    for (let i = startIdx + 1; i < endIdx; i++) {
+      if (lower[i] !== catLower) continue;
+      for (let j = i + 1; j < Math.min(i + 4, endIdx); j++) {
+        const found = findPrice(rawLines[j]);
+        if (found) {
+          prices.set(category, found.price);
+          break;
+        }
+      }
+      break;
+    }
+  }
+  return prices;
+}
+
 /** Best-effort, dependency-free line-item extraction from a quote
  * document's raw text — no LLM, no network call. Never authoritative on
  * its own: every result is meant for a review screen the founder edits
  * before anything is added to a client's checklist, the same "never
  * guess, log for correction" posture as the quick-add rules engine. */
 export function parseQuoteDoc(rawText: string): QuoteDocResult {
-  const lines = rawText
-    .split(/\r?\n/)
+  const allLines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const allLower = allLines.map((l) => l.toLowerCase());
+
+  const templateItems = extractAgastyaOneScope(allLines);
+  if (templateItems && templateItems.length) {
+    const categories = Array.from(new Set(templateItems.map((it) => it.category).filter((c): c is string => !!c)));
+    const prices = resolveServicePrices(allLines, allLower, categories);
+    const items: QuoteDocItem[] = templateItems.slice(0, MAX_ITEMS).map((it) => ({
+      text: it.text,
+      category: it.category,
+      price: it.category ? prices.get(it.category) : undefined
+    }));
+    return { items, totalLines: templateItems.length };
+  }
+
+  // Fallback: generic per-line heuristic for documents that aren't this
+  // known template (a client-edited quote, a different format entirely).
+  const lines = allLines
     .map((l) => l.replace(/^[\s•\-–*]*\d*[.)]?\s*/, '').trim())
     .filter((l) => l.length >= 3 && l.length <= 200)
     .filter((l) => !SKIP_LINE.test(l) && !CONTACT_LINE.test(l) && !looksLikeProse(l));

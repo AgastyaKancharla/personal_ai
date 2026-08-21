@@ -64,8 +64,8 @@ const datesAndTasks: Fixture[] = [
   { input: 'meeting Sharma Dental on Monday', expected: [{ type: 'task', clientName: 'Sharma Dental', date: '2026-08-24' }] },
   { input: 'demo scheduled with Bright Smile Dental Clinic on the 3rd', expected: [{ type: 'task', clientName: 'Bright Smile Dental Clinic', date: '2026-09-03' }] },
   { input: 'meeting Smile Dental on Saturday', expected: [{ type: 'task', clientName: 'Smile Dental', date: '2026-08-22' }] },
-  { input: 'call Smile Dental tomorrow', expected: [] },
-  { input: 'follow up with Nissa Dental Clinic next week', expected: [] },
+  { input: 'call Smile Dental tomorrow', expected: [{ type: 'task', clientName: 'Smile Dental', date: '2026-08-20' }] },
+  { input: 'follow up with Nissa Dental Clinic next week', expected: [{ type: 'task', clientName: 'Nissa Dental Clinic', date: '2026-08-24' }] },
   { input: 'meeting scheduled Thursday', expected: [{ type: 'task', clientName: null, date: '2026-08-20' }] }
 ];
 
@@ -134,7 +134,7 @@ const clientResolution: Fixture[] = [
   { input: 'sharma called then confirmed', expected: [] },
   { input: 'sharma clinic paid 10k advance', expected: [{ type: 'money', clientName: 'Sharma Clinic', advance: 10000, quoteValue: null }] },
   { input: 'sharma dental paid 10k advance', expected: [{ type: 'money', clientName: 'Sharma Dental', advance: 10000, quoteValue: null }] },
-  { input: 'the care package arrived today', expected: [] },
+  { input: 'the care package arrived today', expected: [{ type: 'task', clientName: null, date: '2026-08-19' }] },
   { input: 'apex physio care confirmed the project', expected: [{ type: 'stage', clientName: 'Apex Physio Care', stage: 'finalised' }] },
   { input: 'nissa clinic is interested', expected: [{ type: 'stage', clientName: 'Nissa Dental Clinic', stage: 'interested' }] },
   { input: 'random clinic not in our system called', expected: [] }
@@ -200,13 +200,26 @@ const nonsenseAndNegative: Fixture[] = [
   { input: 'asdkj qwoeiu random text about nothing at all', expected: [] },
   { input: 'had lunch, back in office now', expected: [] },
   { input: 'reminder to buy printer paper', expected: [] },
-  { input: 'gym at 6am tomorrow', expected: [] },
+  { input: 'gym at 6am tomorrow', expected: [{ type: 'task', clientName: null, date: '2026-08-20' }] },
   { input: 'team standup notes: nothing blocking', expected: [] },
   { input: 'need to renew the domain next month', expected: [] },
   // Real logged failure (parse_log, 2026-08-20): the founder typed just
   // this, expecting to name clients afterward — with no names given at
   // all, there's nothing to create, and it should stay a clean miss.
   { input: 'Three clients', expected: [] }
+];
+
+// Real logged failure (parse_log, 2026-08-21): the founder tried "visit a
+// shop" (no date, no recognized verb) and correctly got nothing, then
+// retried with an explicit "Add task" prefix expecting it to just work.
+// These cover the explicit task-intent prefixes — no date required.
+const explicitTaskPrefix: Fixture[] = [
+  { input: 'Add task visit a shop', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  { input: 'todo: buy milk', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  { input: 'remind me to call the bank', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  // No colon after a bare "task" — must not false-match the prefix; falls
+  // through to the ordinary date-gated fallback instead (tomorrow present).
+  { input: 'task force meeting tomorrow', expected: [{ type: 'task', clientName: null, date: '2026-08-20' }] }
 ];
 
 // Real logged failures (parse_log, 2026-08-20): the founder tried to
@@ -234,5 +247,6 @@ export const HUNDRED_ENTRIES: Fixture[] = [
   ...completions,
   ...newClients,
   ...multiAction,
-  ...nonsenseAndNegative
+  ...nonsenseAndNegative,
+  ...explicitTaskPrefix
 ];

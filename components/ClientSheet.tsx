@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronLeft, Check, Trash2, X, Plus, Upload, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ChevronRight, Check, Trash2, X, Plus, Upload, Loader2 } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { STAGES, stageIndex, CATALOGUE } from '@/lib/catalogue';
 import { inr } from '@/lib/dates';
@@ -16,15 +16,23 @@ interface ReviewItem {
   text: string;
   price: string;
   deadline: string;
+  category?: string;
 }
 
 export function ClientSheet({ client, actions, onClose }: { client: Client; actions: Actions; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>('one');
+  const [activityText, setActivityText] = useState('');
   const [one, setOne] = useState('');
   const [paste, setPaste] = useState('');
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [uploadError, setUploadError] = useState('');
   const [reviewItems, setReviewItems] = useState<ReviewItem[] | null>(null);
+  // Which service groups are expanded — collapsed by default so a client
+  // with several services shows a scannable progress-per-service list
+  // instead of every item at once. Keyed by category name; the no-category
+  // group (ad-hoc/pasted items with no service to name) has no header to
+  // click and always renders its items, same as before this existed.
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const total = client.deliverables.length;
   const built = client.deliverables.filter((d) => d.done).length;
   const balance = Math.max(0, (Number(client.quoteValue) || 0) - (Number(client.advance) || 0));
@@ -41,6 +49,12 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
     else acc.push({ category: d.category, items: [d] });
     return acc;
   }, []);
+
+  const logActivity = () => {
+    if (!activityText.trim()) return;
+    actions.addActivityEntry(client.id, activityText.trim());
+    setActivityText('');
+  };
 
   const addPasted = () => {
     const lines = paste
@@ -61,9 +75,11 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
       const res = await fetch('/api/quote-doc', { method: 'POST', body });
       const out = await res.json();
       if (!res.ok) throw new Error(out.error || 'Could not read that file.');
-      const items: { text: string; price?: string; deadline?: string }[] = out.items || [];
+      const items: { text: string; price?: string; deadline?: string; category?: string }[] = out.items || [];
       if (!items.length) throw new Error('Nothing recognizable in that file — try Paste quote instead.');
-      setReviewItems(items.map((it) => ({ include: true, text: it.text, price: it.price || '', deadline: it.deadline || '' })));
+      setReviewItems(
+        items.map((it) => ({ include: true, text: it.text, price: it.price || '', deadline: it.deadline || '', category: it.category }))
+      );
       setUploadStatus('idle');
     } catch (e: any) {
       setUploadStatus('error');
@@ -74,10 +90,20 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
   const commitReviewed = () => {
     if (!reviewItems) return;
     const chosen = reviewItems.filter((it) => it.include && it.text.trim());
-    if (chosen.length) {
+    // Grouped by consecutive same category (mirrors deliverableGroups' own
+    // grouping) so items from a multi-service upload land in the checklist
+    // already separated by service, one addDeliverables call per group.
+    const groups = chosen.reduce<{ category?: string; items: ReviewItem[] }[]>((acc, it) => {
+      const last = acc[acc.length - 1];
+      if (last && last.category === it.category) last.items.push(it);
+      else acc.push({ category: it.category, items: [it] });
+      return acc;
+    }, []);
+    for (const g of groups) {
       actions.addDeliverables(
         client.id,
-        chosen.map((it) => ({ text: it.text.trim(), price: it.price.trim() || undefined, deadline: it.deadline.trim() || undefined }))
+        g.items.map((it) => ({ text: it.text.trim(), price: it.price.trim() || undefined, deadline: it.deadline.trim() || undefined })),
+        g.category
       );
     }
     setReviewItems(null);
@@ -184,44 +210,67 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
               Nothing promised yet. Pull it from the final quote below.
             </div>
           )}
-          {deliverableGroups.map((g, gi) => (
-            <div key={gi}>
-              {g.category && (
-                <div
-                  style={{ fontSize: 10, letterSpacing: '0.1em', color: C.teal, fontWeight: 700, marginTop: gi > 0 ? 14 : 0, marginBottom: 4 }}
-                  className="uppercase"
-                >
-                  {g.category}
-                </div>
-              )}
-              {g.items.map((d) => (
-                <div key={d.id} className="flex items-start gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.line}` }}>
+          {deliverableGroups.map((g, gi) => {
+            const groupDone = g.items.filter((d) => d.done).length;
+            const groupTotal = g.items.length;
+            const groupPct = groupTotal ? Math.round((groupDone / groupTotal) * 100) : 0;
+            const expanded = !g.category || expandedCategories.has(g.category);
+            return (
+              <div key={gi}>
+                {g.category && (
                   <button
-                    onClick={() => actions.toggleDeliverable(client.id, d.id)}
-                    className="shrink-0 rounded-md flex items-center justify-center"
-                    style={{ width: 20, height: 20, marginTop: 1, border: `1.5px solid ${d.done ? C.teal : C.line}`, background: d.done ? C.teal : 'transparent' }}
+                    onClick={() =>
+                      setExpandedCategories((cur) => {
+                        const next = new Set(cur);
+                        if (next.has(g.category!)) next.delete(g.category!);
+                        else next.add(g.category!);
+                        return next;
+                      })
+                    }
+                    className="flex items-center justify-between w-full"
+                    style={{ marginTop: gi > 0 ? 14 : 0, marginBottom: 4, padding: '2px 0' }}
                   >
-                    {d.done && <Check size={12} color={C.white} strokeWidth={3} />}
-                  </button>
-                  <span className="flex-1">
-                    <span
-                      style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
-                    >
-                      {d.text}
-                    </span>
-                    {(d.price || d.deadline) && (
-                      <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>
-                        {[d.price, d.deadline].filter(Boolean).join(' · ')}
+                    <span className="flex items-center gap-1">
+                      {expanded ? <ChevronDown size={12} color={C.teal} /> : <ChevronRight size={12} color={C.teal} />}
+                      <span style={{ fontSize: 10, letterSpacing: '0.1em', color: C.teal, fontWeight: 700 }} className="uppercase">
+                        {g.category}
                       </span>
-                    )}
-                  </span>
-                  <button onClick={() => actions.deleteDeliverable(client.id, d.id)} style={{ color: C.line }}>
-                    <X size={14} />
+                    </span>
+                    <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>
+                      {groupDone}/{groupTotal} · {groupPct}%
+                    </span>
                   </button>
-                </div>
-              ))}
-            </div>
-          ))}
+                )}
+                {expanded &&
+                  g.items.map((d) => (
+                    <div key={d.id} className="flex items-start gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.line}` }}>
+                      <button
+                        onClick={() => actions.toggleDeliverable(client.id, d.id)}
+                        className="shrink-0 rounded-md flex items-center justify-center"
+                        style={{ width: 20, height: 20, marginTop: 1, border: `1.5px solid ${d.done ? C.teal : C.line}`, background: d.done ? C.teal : 'transparent' }}
+                      >
+                        {d.done && <Check size={12} color={C.white} strokeWidth={3} />}
+                      </button>
+                      <span className="flex-1">
+                        <span
+                          style={{ fontSize: 13.5, lineHeight: 1.35, color: d.done ? C.muted : C.ink, textDecoration: d.done ? 'line-through' : 'none' }}
+                        >
+                          {d.text}
+                        </span>
+                        {(d.price || d.deadline) && (
+                          <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>
+                            {[d.price, d.deadline].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                      </span>
+                      <button onClick={() => actions.deleteDeliverable(client.id, d.id)} style={{ color: C.line }}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            );
+          })}
 
           <div className="flex gap-1.5 mt-4 mb-3">
             {(
@@ -435,6 +484,45 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
             className="w-full rounded-xl p-3 outline-none"
             style={{ fontSize: 13.5, border: `1px solid ${C.line}`, color: C.ink, resize: 'none' }}
           />
+        </div>
+
+        <div className="mt-4 rounded-2xl p-4" style={{ background: C.white, border: `1px solid ${C.line}` }}>
+          <Eyebrow>Activity</Eyebrow>
+          <div className="flex gap-2 mb-3">
+            <input
+              value={activityText}
+              onChange={(e) => setActivityText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && logActivity()}
+              placeholder="Called, said…"
+              className="flex-1 rounded-xl px-3 outline-none"
+              style={{ fontSize: 13.5, height: 40, border: `1px solid ${C.line}`, color: C.ink, minWidth: 0 }}
+            />
+            <button onClick={logActivity} className="rounded-xl px-3 shrink-0" style={{ height: 40, background: C.teal, color: C.white, fontSize: 13, fontWeight: 600 }}>
+              Log
+            </button>
+          </div>
+          {(!client.activityLog || client.activityLog.length === 0) && (
+            <div style={{ fontSize: 12.5, color: C.muted }}>No activity logged yet.</div>
+          )}
+          {client.activityLog && client.activityLog.length > 0 && (
+            <div className="space-y-2.5">
+              {[...client.activityLog]
+                .sort((a, b) => b.at.localeCompare(a.at))
+                .map((entry) => (
+                  <div key={entry.id} className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.4 }}>{entry.text}</div>
+                      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>
+                        {new Date(entry.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <button onClick={() => actions.deleteActivityEntry(client.id, entry.id)} className="shrink-0 p-1" style={{ color: C.line }}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

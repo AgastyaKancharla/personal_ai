@@ -14,6 +14,12 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.tasks[0]).toEqual(before.tasks[0]);
   });
 
+  it('addTask carries an optional time through', () => {
+    const before = stateWith({ tasks: [] });
+    const after = applyOp(before, { type: 'addTask', id: 't1', title: 'Call', clientId: null, date: '2026-08-21', time: '09:30' });
+    expect(after.tasks[0].time).toBe('09:30');
+  });
+
   it('toggleTask flips only the named task', () => {
     const before = stateWith({
       tasks: [
@@ -24,6 +30,99 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     const after = applyOp(before, { type: 'toggleTask', id: 't2' });
     expect(after.tasks.find((t) => t.id === 't1')!.done).toBe(false);
     expect(after.tasks.find((t) => t.id === 't2')!.done).toBe(true);
+  });
+
+  it('updateTask patches only the named task, leaving others byte-identical', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false },
+        { id: 't2', title: 'B', clientId: null, date: '2026-08-20', done: false }
+      ]
+    });
+    const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { title: 'A, renamed', date: '2026-08-25' } });
+    expect(after.tasks.find((t) => t.id === 't1')).toEqual({ id: 't1', title: 'A, renamed', clientId: null, date: '2026-08-25', done: false });
+    expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
+  });
+
+  it('updateTask can patch the time alone, without touching other fields', () => {
+    const before = stateWith({ tasks: [{ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false }] });
+    const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { time: '15:00' } });
+    expect(after.tasks[0]).toEqual({ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false, time: '15:00' });
+  });
+
+  it('updateTask can patch the important flag alone, without touching other fields', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false },
+        { id: 't2', title: 'B', clientId: null, date: '2026-08-20', done: false }
+      ]
+    });
+    const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { important: true } });
+    expect(after.tasks.find((t) => t.id === 't1')).toEqual({ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false, important: true });
+    expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
+  });
+
+  it('toggleTask on a recurring task spawns the next occurrence when completed', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Water plants', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily' } }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(2);
+    expect(after.tasks.find((t) => t.id === 't1')!.done).toBe(true);
+    expect(after.tasks.find((t) => t.id === 't2')).toEqual({
+      id: 't2',
+      title: 'Water plants',
+      clientId: null,
+      date: '2026-08-20',
+      done: false,
+      recurrence: { freq: 'daily' },
+      time: undefined
+    });
+  });
+
+  it('toggleTask carries the completed task\'s time forward to its next occurrence', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Standup', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily' }, time: '09:00' }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks.find((t) => t.id === 't2')!.time).toBe('09:00');
+  });
+
+  it('toggleTask spawns the next occurrence when it is still within the recurrence\'s until bound', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'Daily check-in', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily', until: '2026-08-25' } }
+      ]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(2);
+    expect(after.tasks.find((t) => t.id === 't2')).toBeTruthy();
+  });
+
+  it('toggleTask does not spawn a next occurrence past the recurrence\'s until bound', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'Daily check-in', clientId: null, date: '2026-08-25', done: false, recurrence: { freq: 'daily', until: '2026-08-25' } }
+      ]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-26' } });
+    expect(after.tasks).toHaveLength(1);
+    expect(after.tasks[0].done).toBe(true);
+  });
+
+  it('toggleTask does not spawn anything for a non-recurring task', () => {
+    const before = stateWith({ tasks: [{ id: 't1', title: 'One-off', clientId: null, date: '2026-08-19', done: false }] });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1' });
+    expect(after.tasks).toHaveLength(1);
+  });
+
+  it('toggleTask un-completing a recurring task does not spawn a duplicate', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Water plants', clientId: null, date: '2026-08-19', done: true, recurrence: { freq: 'daily' } }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(1);
+    expect(after.tasks[0].done).toBe(false);
   });
 
   it('deleteClient removes only the named client — this is the exact bug that shipped: a one-tap delete with no other safeguard wiped a real client', () => {
@@ -53,6 +152,27 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(updated.stage).toBe('interested');
     expect(updated.history.interested).toBeTruthy();
     expect(after.clients.find((c) => c.id === b.id)).toEqual(b);
+  });
+
+  it('addActivityEntry appends to the named client only, leaving others byte-identical', () => {
+    const a = mkClient('Client A');
+    const b = mkClient('Client B');
+    const before = stateWith({ clients: [a, b] });
+    const entry = { id: 'e1', text: 'Called, said they need a week', at: '2026-08-21T10:00:00.000Z' };
+    const after = applyOp(before, { type: 'addActivityEntry', clientId: a.id, entry });
+    expect(after.clients.find((c) => c.id === a.id)!.activityLog).toEqual([entry]);
+    expect(after.clients.find((c) => c.id === b.id)).toEqual(b);
+  });
+
+  it('deleteActivityEntry removes only the named entry', () => {
+    const a = mkClient('Client A');
+    a.activityLog = [
+      { id: 'e1', text: 'First', at: '2026-08-21T09:00:00.000Z' },
+      { id: 'e2', text: 'Second', at: '2026-08-21T10:00:00.000Z' }
+    ];
+    const before = stateWith({ clients: [a] });
+    const after = applyOp(before, { type: 'deleteActivityEntry', clientId: a.id, entryId: 'e1' });
+    expect(after.clients[0].activityLog!.map((e) => e.id)).toEqual(['e2']);
   });
 
   it('addDeliverables appends to the named client only, carrying category/price/deadline through', () => {

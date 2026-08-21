@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Database, Layers, LogOut, Sun, Users } from 'lucide-react';
+import { CalendarDays, Database, Layers, LogOut, MessageCircle, Search, Sun, Users } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
@@ -14,9 +14,11 @@ import { ClientsView } from '@/components/ClientsView';
 import { ClientSheet } from '@/components/ClientSheet';
 import { QuickAdd } from '@/components/QuickAdd';
 import { DataSheet } from '@/components/DataSheet';
+import { ChatView } from '@/components/ChatView';
+import { SearchSheet } from '@/components/SearchSheet';
 
 type Status = 'loading' | 'ok' | 'saving' | 'offline';
-type Tab = 'today' | 'week' | 'month' | 'clients';
+type Tab = 'today' | 'week' | 'month' | 'clients' | 'chat';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
 const OPS_CACHE_KEY = 'personal-ai:pending-ops';
@@ -49,6 +51,7 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [showData, setShowData] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   // Every edit is a small operation (see lib/stateOps.ts), never a full
   // state snapshot. pendingOps queues them; the debounce below batches
@@ -93,6 +96,32 @@ export default function Home() {
     setDataRaw((d) => updater(d));
   };
 
+  // A chat tool call mutates tracker_state directly server-side (see
+  // app/api/chat/route.ts) — nothing here queues an operation for it, so
+  // the local view needs a plain re-fetch to reflect it. Only trust the
+  // fresh read if nothing is queued locally right now, same reconciliation
+  // rule scheduleFlush's success path already uses below, so this can't
+  // stomp on an edit made via quick-add/the UI in the meantime.
+  const refetchData = async () => {
+    try {
+      const res = await fetch('/api/data');
+      if (res.status === 401) {
+        router.replace('/login');
+        return;
+      }
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'load failed');
+      if (!pendingOps.current.length) {
+        setDataRaw(out.state);
+        setUpdatedAt(out.updatedAt);
+      }
+    } catch (e) {
+      // best-effort — the chat tool call itself already succeeded
+      // server-side; a failed refresh here just leaves the UI stale until
+      // the next successful sync, nothing is lost.
+    }
+  };
+
   const scheduleFlush = (immediate?: { keepalive: boolean }) => {
     if (timer.current) clearTimeout(timer.current);
     setStatus('saving');
@@ -102,6 +131,18 @@ export default function Home() {
       const toSend = pendingOps.current;
       if (!toSend.length) return;
       pendingOps.current = [];
+      // Clear localStorage's copy right now, before the request even goes
+      // out — not after it succeeds. Otherwise there's a window, as long
+      // as the whole round trip, where localStorage still says "these
+      // ops are pending" while they may already be in flight or even
+      // landed server-side; a tab killed mid-request (common on mobile
+      // under battery pressure) leaves that stale flag behind, and the
+      // next load replays the batch on top of the server's real current
+      // state — resurrecting a task that was already deleted, then
+      // re-sending the resurrection right back to the server. If this
+      // request does fail, the catch block below restores both the ref
+      // and localStorage together, so nothing here is silently dropped.
+      persistOps([]);
 
       try {
         const res = await fetch('/api/data/ops', {
@@ -157,11 +198,28 @@ export default function Home() {
     const flushIfHidden = () => {
       if (document.visibilityState === 'hidden') flushNow();
     };
+    // The mirror problem: a phone that suspends this tab in the background
+    // (routine on Android under battery pressure) freezes React's last
+    // rendered state — nothing here re-runs on its own when it's brought
+    // back. Without this, the screen keeps showing that stale snapshot
+    // until some unrelated write happens to overwrite it with a fresh
+    // server read (scheduleFlush's own success path does that, which is
+    // why adding a task looked like it "revealed" older ones — that save's
+    // response was the first fresh read since suspension, not new data).
+    // Explicitly re-sync on every return to foreground instead of waiting
+    // for that to happen by accident.
+    const refetchIfVisible = () => {
+      if (document.visibilityState === 'visible') refetchData();
+    };
     window.addEventListener('pagehide', flushNow);
     document.addEventListener('visibilitychange', flushIfHidden);
+    document.addEventListener('visibilitychange', refetchIfVisible);
+    window.addEventListener('pageshow', refetchIfVisible);
     return () => {
       window.removeEventListener('pagehide', flushNow);
       document.removeEventListener('visibilitychange', flushIfHidden);
+      document.removeEventListener('visibilitychange', refetchIfVisible);
+      window.removeEventListener('pageshow', refetchIfVisible);
     };
   }, [ready]);
 
@@ -178,7 +236,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  const actions = makeActions(setData, setOpenId, enqueue);
+  const actions = makeActions(data, setData, setOpenId, enqueue);
 
   const logout = async () => {
     await fetch('/api/logout', { method: 'POST' });
@@ -215,10 +273,11 @@ export default function Home() {
 
   const openClient = data.clients.find((c) => c.id === openId);
   const TABS: [Tab, string, typeof Sun][] = [
-    ['today', 'Today', Sun],
+    ['today', 'Dashboard', Sun],
     ['week', 'Week', CalendarDays],
     ['month', 'Month', Layers],
-    ['clients', 'Clients', Users]
+    ['clients', 'Clients', Users],
+    ['chat', 'Chat', MessageCircle]
   ];
 
   if (!ready) {
@@ -247,6 +306,9 @@ export default function Home() {
                 >
                   {status === 'offline' ? 'Not synced' : status === 'saving' ? 'Saving' : 'Synced'}
                 </span>
+              </button>
+              <button onClick={() => setShowSearch(true)} title="Search">
+                <Search size={13} color={C.muted} />
               </button>
               <button onClick={logout} title="Log out">
                 <LogOut size={13} color={C.muted} />
@@ -277,15 +339,17 @@ export default function Home() {
               </div>
             </div>
           )}
-          {tab === 'today' && <TodayView data={data} actions={actions} />}
+          {tab === 'today' && <TodayView data={data} actions={actions} onOpenSearch={() => setShowSearch(true)} />}
           {tab === 'week' && <WeekView data={data} actions={actions} />}
           {tab === 'month' && <MonthView data={data} />}
           {tab === 'clients' && <ClientsView data={data} actions={actions} />}
+          {tab === 'chat' && <ChatView onMutated={refetchData} onOpenClient={setOpenId} actions={actions} />}
         </div>
       </div>
 
-      <QuickAdd clients={data.clients} onApply={actions.applyActions} />
+      {tab !== 'chat' && <QuickAdd clients={data.clients} onApply={actions.applyActions} />}
       {showData && <DataSheet data={data} updatedAt={updatedAt} onRestore={restoreBackup} onClose={() => setShowData(false)} />}
+      {showSearch && <SearchSheet data={data} actions={actions} onClose={() => setShowSearch(false)} />}
       {openClient && <ClientSheet client={openClient} actions={actions} onClose={() => setOpenId(null)} />}
     </div>
   );

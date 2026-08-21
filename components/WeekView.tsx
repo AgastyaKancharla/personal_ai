@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
-import { DOW, MONTHS, addDays, iso, mondayOf, today } from '@/lib/dates';
+import { DOW, MONTHS, addDays, byTimeline, iso, mondayOf, today } from '@/lib/dates';
 import { TrackerState } from '@/lib/types';
 import { Actions } from '@/lib/actions';
 import { TaskRow } from './TaskRow';
@@ -41,7 +41,7 @@ export function WeekView({ data, actions }: { data: TrackerState; actions: Actio
       <div className="space-y-2">
         {days.map((d, i) => {
           const key = iso(d);
-          const items = data.tasks.filter((x) => x.date === key);
+          const items = data.tasks.filter((x) => x.date === key).sort(byTimeline);
           const isToday = key === t;
           const isOpen = open === key;
           return (
@@ -73,7 +73,15 @@ export function WeekView({ data, actions }: { data: TrackerState; actions: Actio
                 <div className="px-4 pb-3" style={{ borderTop: `1px solid ${C.line}` }}>
                   <div className="pt-1">
                     {items.map((x) => (
-                      <TaskRow key={x.id} task={x} client={byId[x.clientId || '']} onToggle={actions.toggleTask} onDelete={actions.deleteTask} />
+                      <TaskRow
+                        key={x.id}
+                        task={x}
+                        client={byId[x.clientId || '']}
+                        clients={data.clients}
+                        onToggle={actions.toggleTask}
+                        onDelete={actions.deleteTask}
+                        onUpdate={actions.updateTask}
+                      />
                     ))}
                   </div>
                   <AddTask date={key} clients={data.clients} onAdd={actions.addTask} />
