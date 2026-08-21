@@ -192,7 +192,7 @@ export function TodayView({ data, actions, onOpenSearch }: { data: TrackerState;
       )}
 
       <div className="pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
-        <TrackView data={data} actions={actions} />
+        <TrackView data={data} actions={actions} excludeDate={t} />
       </div>
     </div>
   );

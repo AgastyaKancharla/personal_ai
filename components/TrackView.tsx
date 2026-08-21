@@ -21,15 +21,22 @@ const PRESETS: [string, () => { startIso: string; endIso: string }][] = [
   ['All Time', () => ALL_TIME]
 ];
 
-export function TrackView({ data, actions }: { data: TrackerState; actions: Actions }) {
+export function TrackView({ data, actions, excludeDate }: { data: TrackerState; actions: Actions; excludeDate?: string }) {
   const initial = weekRange(0);
   const [startDate, setStartDate] = useState(initial.startIso);
   const [endDate, setEndDate] = useState(initial.endIso);
 
   const byId = useMemo(() => Object.fromEntries(data.clients.map((c) => [c.id, c])), [data.clients]);
   const summary = summarizeRange(data, startDate, endDate);
-  const done = summary.tasks.filter((t) => t.done);
-  const notDone = summary.tasks.filter((t) => !t.done);
+  // On the dashboard, Today's own card already shows every task dated
+  // today — a "This Week" range would otherwise repeat every one of them
+  // here too. excludeDate strips that one day out; unset (Track used on
+  // its own) leaves the range exactly as selected.
+  const tasks = excludeDate ? summary.tasks.filter((t) => t.date !== excludeDate) : summary.tasks;
+  const done = tasks.filter((t) => t.done);
+  const notDone = tasks.filter((t) => !t.done);
+  const totalCount = tasks.length;
+  const doneCount = done.length;
 
   return (
     <div className="space-y-4">
@@ -74,17 +81,17 @@ export function TrackView({ data, actions }: { data: TrackerState; actions: Acti
 
       <Card>
         <div className="flex items-baseline justify-between">
-          <div style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 700, color: summary.totalCount && summary.doneCount === summary.totalCount ? C.teal : C.ink }}>
-            {summary.doneCount}/{summary.totalCount}
+          <div style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 700, color: totalCount && doneCount === totalCount ? C.teal : C.ink }}>
+            {doneCount}/{totalCount}
           </div>
           <div style={{ fontSize: 11, color: C.muted }}>
-            {summary.doneCount} done · {summary.totalCount - summary.doneCount} pending
+            {doneCount} done · {totalCount - doneCount} pending
             {summary.overdueCount > 0 ? ` · ${summary.overdueCount} overdue` : ''}
           </div>
         </div>
       </Card>
 
-      {summary.totalCount === 0 ? (
+      {totalCount === 0 ? (
         <Empty>No tasks in this range.</Empty>
       ) : (
         <>
