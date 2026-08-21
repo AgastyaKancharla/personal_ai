@@ -33,6 +33,15 @@ export interface DeliverableInput {
   deadline?: string;
 }
 
+export interface ActivityEntry {
+  id: string;
+  text: string;
+  // Full ISO timestamp (date + time), not just a date — unlike everything
+  // else in this app, an activity log entry is meaningful by time of day
+  // too ("called at 4pm" vs "called this morning").
+  at: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -45,6 +54,11 @@ export interface Client {
   nextFollowUp: string;
   createdAt: string;
   history: Partial<Record<StageKey, string>>;
+  // An append-only timestamped log ("called, said X", "sent revised
+  // quote") — separate from the single free-text `notes` box above, which
+  // stays a single overwritable scratchpad. Optional so every client
+  // created before this shipped reads the same as one with an empty log.
+  activityLog?: ActivityEntry[];
 }
 
 export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly';

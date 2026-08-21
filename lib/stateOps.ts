@@ -1,4 +1,4 @@
-import { Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
+import { ActivityEntry, Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
 import { stageIndex, findService } from './catalogue';
 import { today, uid } from './dates';
 
@@ -24,6 +24,8 @@ export type Operation =
   | { type: 'addDeliverables'; clientId: string; items: (DeliverableInput & { id: string })[]; category?: string }
   | { type: 'toggleDeliverable'; clientId: string; deliverableId: string }
   | { type: 'deleteDeliverable'; clientId: string; deliverableId: string }
+  | { type: 'addActivityEntry'; clientId: string; entry: ActivityEntry }
+  | { type: 'deleteActivityEntry'; clientId: string; entryId: string }
   | { type: 'applyQuickAddActions'; list: QuickAddAction[] };
 
 function newClient(id: string, name: string, phone?: string | null): Client {
@@ -244,6 +246,20 @@ export function applyOp(state: TrackerState, op: Operation): TrackerState {
         ...state,
         clients: state.clients.map((c) =>
           c.id === op.clientId ? { ...c, deliverables: c.deliverables.filter((x) => x.id !== op.deliverableId) } : c
+        )
+      };
+
+    case 'addActivityEntry':
+      return {
+        ...state,
+        clients: state.clients.map((c) => (c.id === op.clientId ? { ...c, activityLog: [...(c.activityLog || []), op.entry] } : c))
+      };
+
+    case 'deleteActivityEntry':
+      return {
+        ...state,
+        clients: state.clients.map((c) =>
+          c.id === op.clientId ? { ...c, activityLog: (c.activityLog || []).filter((e) => e.id !== op.entryId) } : c
         )
       };
 

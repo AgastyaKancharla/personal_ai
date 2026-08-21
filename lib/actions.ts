@@ -16,6 +16,8 @@ export interface Actions {
   addDeliverables: (id: string, items: DeliverableInput[], category?: string) => void;
   toggleDeliverable: (clientId: string, deliverableId: string) => void;
   deleteDeliverable: (clientId: string, deliverableId: string) => void;
+  addActivityEntry: (clientId: string, text: string) => void;
+  deleteActivityEntry: (clientId: string, entryId: string) => void;
   openClient: (id: string) => void;
   applyActions: (list: QuickAddAction[]) => void;
 }
@@ -68,6 +70,10 @@ export function makeActions(data: TrackerState, setData: SetState, openClientId:
     toggleDeliverable: (clientId, deliverableId) => run({ type: 'toggleDeliverable', clientId, deliverableId }),
 
     deleteDeliverable: (clientId, deliverableId) => run({ type: 'deleteDeliverable', clientId, deliverableId }),
+
+    addActivityEntry: (clientId, text) => run({ type: 'addActivityEntry', clientId, entry: { id: uid(), text, at: new Date().toISOString() } }),
+
+    deleteActivityEntry: (clientId, entryId) => run({ type: 'deleteActivityEntry', clientId, entryId }),
 
     openClient: (id) => openClientId(id),
 

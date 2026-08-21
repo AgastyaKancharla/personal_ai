@@ -132,6 +132,27 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.clients.find((c) => c.id === b.id)).toEqual(b);
   });
 
+  it('addActivityEntry appends to the named client only, leaving others byte-identical', () => {
+    const a = mkClient('Client A');
+    const b = mkClient('Client B');
+    const before = stateWith({ clients: [a, b] });
+    const entry = { id: 'e1', text: 'Called, said they need a week', at: '2026-08-21T10:00:00.000Z' };
+    const after = applyOp(before, { type: 'addActivityEntry', clientId: a.id, entry });
+    expect(after.clients.find((c) => c.id === a.id)!.activityLog).toEqual([entry]);
+    expect(after.clients.find((c) => c.id === b.id)).toEqual(b);
+  });
+
+  it('deleteActivityEntry removes only the named entry', () => {
+    const a = mkClient('Client A');
+    a.activityLog = [
+      { id: 'e1', text: 'First', at: '2026-08-21T09:00:00.000Z' },
+      { id: 'e2', text: 'Second', at: '2026-08-21T10:00:00.000Z' }
+    ];
+    const before = stateWith({ clients: [a] });
+    const after = applyOp(before, { type: 'deleteActivityEntry', clientId: a.id, entryId: 'e1' });
+    expect(after.clients[0].activityLog!.map((e) => e.id)).toEqual(['e2']);
+  });
+
   it('addDeliverables appends to the named client only, carrying category/price/deadline through', () => {
     const a = mkClient('Client A');
     const b = mkClient('Client B');

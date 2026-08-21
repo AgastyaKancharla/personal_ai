@@ -21,6 +21,7 @@ interface ReviewItem {
 
 export function ClientSheet({ client, actions, onClose }: { client: Client; actions: Actions; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>('one');
+  const [activityText, setActivityText] = useState('');
   const [one, setOne] = useState('');
   const [paste, setPaste] = useState('');
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -48,6 +49,12 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
     else acc.push({ category: d.category, items: [d] });
     return acc;
   }, []);
+
+  const logActivity = () => {
+    if (!activityText.trim()) return;
+    actions.addActivityEntry(client.id, activityText.trim());
+    setActivityText('');
+  };
 
   const addPasted = () => {
     const lines = paste
@@ -477,6 +484,45 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
             className="w-full rounded-xl p-3 outline-none"
             style={{ fontSize: 13.5, border: `1px solid ${C.line}`, color: C.ink, resize: 'none' }}
           />
+        </div>
+
+        <div className="mt-4 rounded-2xl p-4" style={{ background: C.white, border: `1px solid ${C.line}` }}>
+          <Eyebrow>Activity</Eyebrow>
+          <div className="flex gap-2 mb-3">
+            <input
+              value={activityText}
+              onChange={(e) => setActivityText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && logActivity()}
+              placeholder="Called, said…"
+              className="flex-1 rounded-xl px-3 outline-none"
+              style={{ fontSize: 13.5, height: 40, border: `1px solid ${C.line}`, color: C.ink, minWidth: 0 }}
+            />
+            <button onClick={logActivity} className="rounded-xl px-3 shrink-0" style={{ height: 40, background: C.teal, color: C.white, fontSize: 13, fontWeight: 600 }}>
+              Log
+            </button>
+          </div>
+          {(!client.activityLog || client.activityLog.length === 0) && (
+            <div style={{ fontSize: 12.5, color: C.muted }}>No activity logged yet.</div>
+          )}
+          {client.activityLog && client.activityLog.length > 0 && (
+            <div className="space-y-2.5">
+              {[...client.activityLog]
+                .sort((a, b) => b.at.localeCompare(a.at))
+                .map((entry) => (
+                  <div key={entry.id} className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.4 }}>{entry.text}</div>
+                      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>
+                        {new Date(entry.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <button onClick={() => actions.deleteActivityEntry(client.id, entry.id)} className="shrink-0 p-1" style={{ color: C.line }}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

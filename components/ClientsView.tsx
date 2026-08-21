@@ -5,6 +5,7 @@ import { Plus, X } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { STAGES, stageIndex } from '@/lib/catalogue';
 import { inr } from '@/lib/dates';
+import { summarizeRevenue } from '@/lib/revenue';
 import { TrackerState } from '@/lib/types';
 import { Actions } from '@/lib/actions';
 import { Card, Empty, Eyebrow } from './Primitives';
@@ -23,6 +24,7 @@ export function ClientsView({ data, actions }: { data: TrackerState; actions: Ac
   };
 
   const grouped = STAGES.map((s) => ({ ...s, list: data.clients.filter((c) => c.stage === s.key) })).filter((g) => g.list.length);
+  const revenue = summarizeRevenue(data.clients);
 
   return (
     <div className="space-y-4">
@@ -38,6 +40,28 @@ export function ClientsView({ data, actions }: { data: TrackerState; actions: Ac
           <span style={{ fontSize: 13, color: C.white, fontWeight: 600 }}>{adding ? 'Cancel' : 'New'}</span>
         </button>
       </div>
+
+      {revenue.totalQuoted > 0 && (
+        <Card>
+          <Eyebrow>Revenue</Eyebrow>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, color: C.ink }}>{inr(revenue.totalQuoted)}</div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>Quoted</div>
+            </div>
+            <div className="flex-1">
+              <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, color: C.teal }}>{inr(revenue.totalCollected)}</div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>Collected</div>
+            </div>
+            <div className="flex-1">
+              <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, color: revenue.totalOutstanding > 0 ? C.orange : C.ink }}>
+                {inr(revenue.totalOutstanding)}
+              </div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>Outstanding</div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {adding && (
         <Card>
