@@ -16,6 +16,7 @@ interface ReviewItem {
   text: string;
   price: string;
   deadline: string;
+  category?: string;
 }
 
 export function ClientSheet({ client, actions, onClose }: { client: Client; actions: Actions; onClose: () => void }) {
@@ -61,9 +62,11 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
       const res = await fetch('/api/quote-doc', { method: 'POST', body });
       const out = await res.json();
       if (!res.ok) throw new Error(out.error || 'Could not read that file.');
-      const items: { text: string; price?: string; deadline?: string }[] = out.items || [];
+      const items: { text: string; price?: string; deadline?: string; category?: string }[] = out.items || [];
       if (!items.length) throw new Error('Nothing recognizable in that file — try Paste quote instead.');
-      setReviewItems(items.map((it) => ({ include: true, text: it.text, price: it.price || '', deadline: it.deadline || '' })));
+      setReviewItems(
+        items.map((it) => ({ include: true, text: it.text, price: it.price || '', deadline: it.deadline || '', category: it.category }))
+      );
       setUploadStatus('idle');
     } catch (e: any) {
       setUploadStatus('error');
@@ -74,10 +77,20 @@ export function ClientSheet({ client, actions, onClose }: { client: Client; acti
   const commitReviewed = () => {
     if (!reviewItems) return;
     const chosen = reviewItems.filter((it) => it.include && it.text.trim());
-    if (chosen.length) {
+    // Grouped by consecutive same category (mirrors deliverableGroups' own
+    // grouping) so items from a multi-service upload land in the checklist
+    // already separated by service, one addDeliverables call per group.
+    const groups = chosen.reduce<{ category?: string; items: ReviewItem[] }[]>((acc, it) => {
+      const last = acc[acc.length - 1];
+      if (last && last.category === it.category) last.items.push(it);
+      else acc.push({ category: it.category, items: [it] });
+      return acc;
+    }, []);
+    for (const g of groups) {
       actions.addDeliverables(
         client.id,
-        chosen.map((it) => ({ text: it.text.trim(), price: it.price.trim() || undefined, deadline: it.deadline.trim() || undefined }))
+        g.items.map((it) => ({ text: it.text.trim(), price: it.price.trim() || undefined, deadline: it.deadline.trim() || undefined })),
+        g.category
       );
     }
     setReviewItems(null);
