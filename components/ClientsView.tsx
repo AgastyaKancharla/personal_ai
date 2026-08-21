@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Columns3, List, Plus, X } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { STAGES, stageIndex } from '@/lib/catalogue';
 import { inr } from '@/lib/dates';
@@ -9,11 +9,13 @@ import { summarizeRevenue } from '@/lib/revenue';
 import { TrackerState } from '@/lib/types';
 import { Actions } from '@/lib/actions';
 import { Card, Empty, Eyebrow } from './Primitives';
+import { PipelineBoard } from './PipelineBoard';
 
 export function ClientsView({ data, actions }: { data: TrackerState; actions: Actions }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [view, setView] = useState<'list' | 'board'>('list');
 
   const add = () => {
     if (!name.trim()) return;
@@ -35,10 +37,28 @@ export function ClientsView({ data, actions }: { data: TrackerState; actions: Ac
             {data.clients.filter((c) => stageIndex(c.stage) >= 5).length} paid · {data.clients.filter((c) => c.stage === 'delivered').length} delivered
           </div>
         </div>
-        <button onClick={() => setAdding(!adding)} className="rounded-xl px-3 flex items-center gap-1.5" style={{ height: 38, background: C.teal }}>
-          {adding ? <X size={15} color={C.white} /> : <Plus size={15} color={C.white} strokeWidth={2.5} />}
-          <span style={{ fontSize: 13, color: C.white, fontWeight: 600 }}>{adding ? 'Cancel' : 'New'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-xl p-1" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+            <button
+              onClick={() => setView('list')}
+              className="rounded-lg flex items-center justify-center"
+              style={{ width: 30, height: 30, background: view === 'list' ? C.white : 'transparent' }}
+            >
+              <List size={13} color={view === 'list' ? C.ink : C.muted} />
+            </button>
+            <button
+              onClick={() => setView('board')}
+              className="rounded-lg flex items-center justify-center"
+              style={{ width: 30, height: 30, background: view === 'board' ? C.white : 'transparent' }}
+            >
+              <Columns3 size={13} color={view === 'board' ? C.ink : C.muted} />
+            </button>
+          </div>
+          <button onClick={() => setAdding(!adding)} className="rounded-xl px-3 flex items-center gap-1.5" style={{ height: 38, background: C.teal }}>
+            {adding ? <X size={15} color={C.white} /> : <Plus size={15} color={C.white} strokeWidth={2.5} />}
+            <span style={{ fontSize: 13, color: C.white, fontWeight: 600 }}>{adding ? 'Cancel' : 'New'}</span>
+          </button>
+        </div>
       </div>
 
       {revenue.totalQuoted > 0 && (
@@ -89,7 +109,9 @@ export function ClientsView({ data, actions }: { data: TrackerState; actions: Ac
 
       {data.clients.length === 0 && !adding && <Empty>No clients yet. Add the first business you called.</Empty>}
 
-      {grouped.map((g) => (
+      {view === 'board' && data.clients.length > 0 && <PipelineBoard data={data} actions={actions} />}
+
+      {view === 'list' && grouped.map((g) => (
         <div key={g.key}>
           <div className="flex items-center gap-2 mb-2">
             <span className="rounded-full" style={{ width: 7, height: 7, background: stageIndex(g.key) >= 5 ? C.teal : C.orange }} />
