@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Database, Layers, ListChecks, LogOut, MessageCircle, Search, Sun, Users } from 'lucide-react';
+import { CalendarDays, Database, Layers, LogOut, MessageCircle, Search, Sun, Users } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
@@ -15,11 +15,10 @@ import { ClientSheet } from '@/components/ClientSheet';
 import { QuickAdd } from '@/components/QuickAdd';
 import { DataSheet } from '@/components/DataSheet';
 import { ChatView } from '@/components/ChatView';
-import { TrackView } from '@/components/TrackView';
 import { SearchSheet } from '@/components/SearchSheet';
 
 type Status = 'loading' | 'ok' | 'saving' | 'offline';
-type Tab = 'today' | 'week' | 'month' | 'clients' | 'track' | 'chat';
+type Tab = 'today' | 'week' | 'month' | 'clients' | 'chat';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
 const OPS_CACHE_KEY = 'personal-ai:pending-ops';
@@ -262,11 +261,10 @@ export default function Home() {
 
   const openClient = data.clients.find((c) => c.id === openId);
   const TABS: [Tab, string, typeof Sun][] = [
-    ['today', 'Today', Sun],
+    ['today', 'Dashboard', Sun],
     ['week', 'Week', CalendarDays],
     ['month', 'Month', Layers],
     ['clients', 'Clients', Users],
-    ['track', 'Track', ListChecks],
     ['chat', 'Chat', MessageCircle]
   ];
 
@@ -329,11 +327,10 @@ export default function Home() {
               </div>
             </div>
           )}
-          {tab === 'today' && <TodayView data={data} actions={actions} />}
+          {tab === 'today' && <TodayView data={data} actions={actions} onOpenSearch={() => setShowSearch(true)} />}
           {tab === 'week' && <WeekView data={data} actions={actions} />}
           {tab === 'month' && <MonthView data={data} />}
           {tab === 'clients' && <ClientsView data={data} actions={actions} />}
-          {tab === 'track' && <TrackView data={data} actions={actions} />}
           {tab === 'chat' && <ChatView onMutated={refetchData} onOpenClient={setOpenId} actions={actions} />}
         </div>
       </div>
