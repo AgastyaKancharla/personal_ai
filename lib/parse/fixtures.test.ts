@@ -12,12 +12,15 @@ function matches(actions: Action[], expected: Fixture['expected']): boolean {
   });
 }
 
-describe('rules engine — 100 hand-written entries', () => {
-  it('has exactly 100 fixtures', () => {
-    expect(HUNDRED_ENTRIES.length).toBe(100);
+// Grew past 100 with the explicit-task-prefix cases added 2026-08-21 — the
+// file's own docstring anticipates this ("a real logged entry that breaks
+// something new belongs here as a new case, not just a bug fix").
+describe('rules engine — hand-written entries (started at 100)', () => {
+  it('has the expected fixture count', () => {
+    expect(HUNDRED_ENTRIES.length).toBe(104);
   });
 
-  it('handles at least 70% of the 100 entries exactly, with no network call', () => {
+  it('handles at least 70% of the entries exactly, with no network call', () => {
     const failures: string[] = [];
     let passed = 0;
     for (const fixture of HUNDRED_ENTRIES) {

@@ -84,4 +84,32 @@ describe('parse — integration', () => {
     const result = parse('had lunch, back in office now', { clients: [], today: TODAY });
     expect(result.actions).toEqual([]);
   });
+
+  it('creates a task from an explicit "Add task" prefix with no date at all, defaulting to today', () => {
+    const result = parse('Add task visit a shop', { clients: [], today: TODAY });
+    expect(result.actions).toEqual([{ type: 'task', title: 'Visit a shop', clientName: null, date: TODAY }]);
+    expect(result.confidence).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it('recognizes "todo:" and "remind me to" as the same explicit task prefix', () => {
+    expect(parse('todo: buy milk', { clients: [], today: TODAY }).actions).toEqual([{ type: 'task', title: 'Buy milk', clientName: null, date: TODAY }]);
+    expect(parse('remind me to call the bank', { clients: [], today: TODAY }).actions).toEqual([
+      { type: 'task', title: 'Call the bank', clientName: null, date: TODAY }
+    ]);
+  });
+
+  it('still links a resolved client when an explicit task prefix is used', () => {
+    const clients = [mkClient('Smile Dental')];
+    const result = parse('add task call Smile Dental', { clients, today: TODAY });
+    // The client name is tracked via clientName, not duplicated in the
+    // title — same behavior as the plain date-gated fallback above.
+    expect(result.actions).toEqual([{ type: 'task', title: 'Call', clientName: 'Smile Dental', date: TODAY }]);
+  });
+
+  it('does not false-match a bare "task"/"todo" with no colon as the explicit prefix', () => {
+    // No date, no colon after "task" — must stay unrecognized, not become
+    // a task titled "force meeting" or similar.
+    const result = parse('task force meeting', { clients: [], today: TODAY });
+    expect(result.actions).toEqual([]);
+  });
 });

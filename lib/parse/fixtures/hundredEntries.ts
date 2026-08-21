@@ -209,6 +209,19 @@ const nonsenseAndNegative: Fixture[] = [
   { input: 'Three clients', expected: [] }
 ];
 
+// Real logged failure (parse_log, 2026-08-21): the founder tried "visit a
+// shop" (no date, no recognized verb) and correctly got nothing, then
+// retried with an explicit "Add task" prefix expecting it to just work.
+// These cover the explicit task-intent prefixes — no date required.
+const explicitTaskPrefix: Fixture[] = [
+  { input: 'Add task visit a shop', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  { input: 'todo: buy milk', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  { input: 'remind me to call the bank', expected: [{ type: 'task', clientName: null, date: TODAY }] },
+  // No colon after a bare "task" — must not false-match the prefix; falls
+  // through to the ordinary date-gated fallback instead (tomorrow present).
+  { input: 'task force meeting tomorrow', expected: [{ type: 'task', clientName: null, date: '2026-08-20' }] }
+];
+
 // Real logged failures (parse_log, 2026-08-20): the founder tried to
 // declare several brand-new clients in one line and nothing fired, because
 // resolveClient() only ever resolves against the *existing* roster. These
@@ -234,5 +247,6 @@ export const HUNDRED_ENTRIES: Fixture[] = [
   ...completions,
   ...newClients,
   ...multiAction,
-  ...nonsenseAndNegative
+  ...nonsenseAndNegative,
+  ...explicitTaskPrefix
 ];
