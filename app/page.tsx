@@ -6,6 +6,7 @@ import { CalendarDays, Database, Layers, LogOut, Sun, Users } from 'lucide-react
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
+import { Operation, applyOp } from '@/lib/stateOps';
 import { TodayView } from '@/components/TodayView';
 import { WeekView } from '@/components/WeekView';
 import { MonthView } from '@/components/MonthView';
@@ -18,22 +19,21 @@ type Status = 'loading' | 'ok' | 'saving' | 'offline';
 type Tab = 'today' | 'week' | 'month' | 'clients';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
-const CACHE_KEY = 'personal-ai:last-saved';
+const OPS_CACHE_KEY = 'personal-ai:pending-ops';
 
-type Cached = { state: TrackerState; updatedAt: string };
-
-function readCache(): Cached | null {
+function readPersistedOps(): Operation[] {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as Cached) : null;
+    const raw = localStorage.getItem(OPS_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Operation[]) : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-function writeCache(state: TrackerState, updatedAt: string) {
+function persistOps(ops: Operation[]) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ state, updatedAt }));
+    if (ops.length) localStorage.setItem(OPS_CACHE_KEY, JSON.stringify(ops));
+    else localStorage.removeItem(OPS_CACHE_KEY);
   } catch {
     // best-effort only — a full localStorage or private-browsing mode
     // shouldn't break saving to the actual database
@@ -50,12 +50,21 @@ export default function Home() {
   const [status, setStatus] = useState<Status>('loading');
   const [showData, setShowData] = useState(false);
 
+  // Every edit is a small operation (see lib/stateOps.ts), never a full
+  // state snapshot. pendingOps queues them; the debounce below batches
+  // rapid edits into one request. Whatever hasn't been sent yet is also
+  // mirrored to localStorage so a hard refresh or crash mid-edit doesn't
+  // lose it — on the next load it gets replayed against the server's
+  // *current* row, same as any other operation, never overwriting
+  // anything it doesn't name.
+  const pendingOps = useRef<Operation[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const boot = useRef(true);
-  const forceResave = useRef(false);
 
   useEffect(() => {
     (async () => {
+      const leftover = readPersistedOps();
+      pendingOps.current = leftover;
+
       try {
         const res = await fetch('/api/data');
         if (res.status === 401) {
@@ -66,24 +75,13 @@ export default function Home() {
         const out = await res.json();
         if (!res.ok) throw new Error(out.error || 'load failed');
 
-        const cached = readCache();
-        // A read immediately after a write can occasionally come back
-        // stale (seen live in production: a save completes, and a load a
-        // few seconds later comes back without it, even though the row
-        // was already correctly written). Never let a technically-200
-        // but stale read regress onto state we already know is good —
-        // trust whichever side has the newer timestamp, and if that's
-        // the local cache, push it back up so the server catches up too.
-        if (cached && (!out.updatedAt || new Date(cached.updatedAt) > new Date(out.updatedAt))) {
-          setDataRaw(cached.state);
-          setUpdatedAt(cached.updatedAt);
-          forceResave.current = true;
-        } else {
-          setDataRaw(out.state);
-          setUpdatedAt(out.updatedAt);
-          writeCache(out.state, out.updatedAt || new Date().toISOString());
-        }
-        setStatus('ok');
+        // Replay any operations left over from an interrupted session on
+        // top of the server's current state, so the UI shows what was
+        // actually attempted last time, not a stale pre-edit view.
+        const state = leftover.reduce((s, op) => applyOp(s, op), out.state as TrackerState);
+        setDataRaw(state);
+        setUpdatedAt(out.updatedAt);
+        setStatus(leftover.length ? 'saving' : 'ok');
       } catch (e) {
         setStatus('offline');
       }
@@ -95,81 +93,124 @@ export default function Home() {
     setDataRaw((d) => updater(d));
   };
 
-  useEffect(() => {
-    if (!ready) return;
-    if (boot.current) {
-      boot.current = false;
-      // Normally the very first data-effect run is just the mount load
-      // settling in, not a real edit — nothing to save. The one exception
-      // is when that load decided the server's own read was stale and
-      // substituted our local cache instead; that needs to reach the
-      // server so it catches up, so fall through to schedule a save.
-      if (!forceResave.current) return;
-      forceResave.current = false;
-    }
-    setStatus('saving');
+  const scheduleFlush = (immediate?: { keepalive: boolean }) => {
     if (timer.current) clearTimeout(timer.current);
+    setStatus('saving');
 
-    // keepalive is reserved for the unload flush below — it shares the
-    // browser's small (~64KB) total keepalive request-body quota across
-    // every in-flight request, and this save ships the entire tracker
-    // state, so forcing it on every normal debounced save risks silently
-    // failing once a board's notes/deliverables grow past that budget.
-    const doSave = (opts?: { keepalive?: boolean }) =>
-      fetch('/api/data', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-        keepalive: !!opts?.keepalive
-      });
-
-    // A refresh, tab close, or app switch cancels the pending setTimeout
-    // outright, silently dropping whatever the 500ms debounce hadn't sent
-    // yet — that's the "edited a client, refreshed, and it was gone" bug.
-    // keepalive lets the browser finish this request after the page starts
-    // unloading; pagehide/visibilitychange fire even when a hard refresh
-    // never gives beforeunload a chance to run (common on mobile). Cache
-    // is written synchronously before the request so even an unobserved
-    // (page-gone) response still leaves the next load with the right data.
-    const flush = () => {
-      if (timer.current) {
-        clearTimeout(timer.current);
-        timer.current = null;
-        writeCache(data, new Date().toISOString());
-        doSave({ keepalive: true });
-      }
-    };
-    const flushIfHidden = () => {
-      if (document.visibilityState === 'hidden') flush();
-    };
-    window.addEventListener('pagehide', flush);
-    document.addEventListener('visibilitychange', flushIfHidden);
-
-    timer.current = setTimeout(async () => {
+    const flush = async (keepalive: boolean) => {
       timer.current = null;
+      const toSend = pendingOps.current;
+      if (!toSend.length) return;
+      pendingOps.current = [];
+
       try {
-        const res = await doSave();
-        if (!res.ok) throw new Error('save failed');
-        const savedAt = new Date().toISOString();
-        setUpdatedAt(savedAt);
-        writeCache(data, savedAt);
-        setStatus('ok');
+        const res = await fetch('/api/data/ops', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operations: toSend }),
+          keepalive
+        });
+        const out = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(out?.error || 'save failed');
+
+        // Only trust the server's authoritative result back into local
+        // state if nothing new was queued while this request was in
+        // flight — otherwise we'd stomp on an edit made in the meantime
+        // (e.g. still typing). If something did come in, it's already
+        // reflected in local state optimistically and will go out, and
+        // reconcile, on the next flush.
+        if (!pendingOps.current.length) {
+          setDataRaw(out.state);
+          setUpdatedAt(out.updatedAt);
+          persistOps([]);
+          setStatus('ok');
+        } else {
+          persistOps(pendingOps.current);
+          setStatus('saving');
+        }
       } catch (e) {
+        // Put the unsent operations back so the next flush (or the
+        // pagehide handler) retries them, in order, ahead of anything
+        // queued since.
+        pendingOps.current = [...toSend, ...pendingOps.current];
+        persistOps(pendingOps.current);
         setStatus('offline');
       }
-    }, 500);
+    };
 
+    if (immediate) {
+      flush(immediate.keepalive);
+    } else {
+      timer.current = setTimeout(() => flush(false), 500);
+    }
+  };
+
+  useEffect(() => {
+    if (!ready) return;
+    // A refresh, tab close, or app switch cancels the pending setTimeout
+    // outright, silently dropping whatever the 500ms debounce hadn't sent
+    // yet — flush immediately (with keepalive so it survives an unloading
+    // page) on pagehide/visibilitychange, same as the timed flush above.
+    const flushNow = () => {
+      if (pendingOps.current.length) scheduleFlush({ keepalive: true });
+    };
+    const flushIfHidden = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', flushIfHidden);
     return () => {
-      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('pagehide', flushNow);
       document.removeEventListener('visibilitychange', flushIfHidden);
     };
-  }, [data, ready]);
+  }, [ready]);
 
-  const actions = makeActions(setData, setOpenId);
+  const enqueue = (op: Operation) => {
+    pendingOps.current = [...pendingOps.current, op];
+    persistOps(pendingOps.current);
+    scheduleFlush();
+  };
+
+  useEffect(() => {
+    // Pick up any operations left over from an interrupted previous
+    // session (see the mount effect above) once we're actually ready.
+    if (ready && pendingOps.current.length) scheduleFlush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  const actions = makeActions(setData, setOpenId, enqueue);
 
   const logout = async () => {
     await fetch('/api/logout', { method: 'POST' });
     router.replace('/login');
+  };
+
+  const restoreBackup = async (state: TrackerState) => {
+    // Deliberate exception to "never send a full snapshot": the user
+    // explicitly asked to replace everything with a backup they pasted in
+    // themselves. Goes straight to the full-replace endpoint, not through
+    // the operations queue — and anything still queued from before this
+    // point is now stale (it was meant for the pre-restore state) and
+    // must not be replayed on top of the restored data later.
+    if (timer.current) clearTimeout(timer.current);
+    pendingOps.current = [];
+    persistOps([]);
+    setDataRaw(state);
+    setShowData(false);
+    setStatus('saving');
+    try {
+      const res = await fetch('/api/data', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state)
+      });
+      if (!res.ok) throw new Error('restore failed');
+      const savedAt = new Date().toISOString();
+      setUpdatedAt(savedAt);
+      setStatus('ok');
+    } catch (e) {
+      setStatus('offline');
+    }
   };
 
   const openClient = data.clients.find((c) => c.id === openId);
@@ -244,7 +285,7 @@ export default function Home() {
       </div>
 
       <QuickAdd clients={data.clients} onApply={actions.applyActions} />
-      {showData && <DataSheet data={data} updatedAt={updatedAt} onRestore={(p) => { setDataRaw(p); setShowData(false); }} onClose={() => setShowData(false)} />}
+      {showData && <DataSheet data={data} updatedAt={updatedAt} onRestore={restoreBackup} onClose={() => setShowData(false)} />}
       {openClient && <ClientSheet client={openClient} actions={actions} onClose={() => setOpenId(null)} />}
     </div>
   );

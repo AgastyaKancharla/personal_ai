@@ -1,7 +1,6 @@
-import { Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
-import { stageIndex } from './catalogue';
-import { findService } from './catalogue';
-import { today, uid } from './dates';
+import { Client, DeliverableInput, QuickAddAction, StageKey, TrackerState } from './types';
+import { Operation, applyOp } from './stateOps';
+import { uid } from './dates';
 
 export type SetState = (updater: (d: TrackerState) => TrackerState) => void;
 
@@ -20,178 +19,42 @@ export interface Actions {
   applyActions: (list: QuickAddAction[]) => void;
 }
 
-function newClient(name: string, phone?: string | null): Client {
-  return {
-    id: uid(),
-    name: name.trim(),
-    phone: phone || '',
-    stage: 'cold',
-    quoteValue: '',
-    advance: '',
-    deliverables: [],
-    notes: '',
-    nextFollowUp: '',
-    createdAt: today(),
-    history: { cold: today() }
+/** Builds the UI-facing Actions object. Every method does two things: (1)
+ * updates local state immediately via the same applyOp() the server uses,
+ * for instant feedback, and (2) hands the operation to `enqueue`, which is
+ * responsible for actually getting it to the server — see app/page.tsx's
+ * ops queue. Nothing here ever ships a full TrackerState anywhere; only
+ * these small, specific instructions do. */
+export function makeActions(setData: SetState, openClientId: (id: string) => void, enqueue: (op: Operation) => void): Actions {
+  const run = (op: Operation) => {
+    setData((d) => applyOp(d, op));
+    enqueue(op);
   };
-}
 
-export function makeActions(setData: SetState, openClientId: (id: string) => void): Actions {
   return {
-    addTask: (title, clientId, date) =>
-      setData((d) => ({ ...d, tasks: [...d.tasks, { id: uid(), title, clientId, date, done: false }] })),
+    addTask: (title, clientId, date) => run({ type: 'addTask', id: uid(), title, clientId, date }),
 
-    toggleTask: (id) =>
-      setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) })),
+    toggleTask: (id) => run({ type: 'toggleTask', id }),
 
-    deleteTask: (id) => setData((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== id) })),
+    deleteTask: (id) => run({ type: 'deleteTask', id }),
 
-    addClient: (name, phone) => setData((d) => ({ ...d, clients: [...d.clients, newClient(name, phone)] })),
+    addClient: (name, phone) => run({ type: 'addClient', id: uid(), name, phone }),
 
-    updateClient: (id, patch) =>
-      setData((d) => ({ ...d, clients: d.clients.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
+    updateClient: (id, patch) => run({ type: 'updateClient', id, patch }),
 
-    deleteClient: (id) => setData((d) => ({ ...d, clients: d.clients.filter((c) => c.id !== id) })),
+    deleteClient: (id) => run({ type: 'deleteClient', id }),
 
-    setStage: (id, stage) =>
-      setData((d) => ({
-        ...d,
-        clients: d.clients.map((c) =>
-          c.id === id ? { ...c, stage, history: { ...c.history, [stage]: c.history[stage] || today() } } : c
-        )
-      })),
+    setStage: (id, stage) => run({ type: 'setStage', id, stage }),
 
     addDeliverables: (id, items, category) =>
-      setData((d) => ({
-        ...d,
-        clients: d.clients.map((c) =>
-          c.id === id
-            ? {
-                ...c,
-                deliverables: [
-                  ...c.deliverables,
-                  ...items.map((it) => ({ id: uid(), text: it.text, done: false, category, price: it.price, deadline: it.deadline }))
-                ]
-              }
-            : c
-        )
-      })),
+      run({ type: 'addDeliverables', clientId: id, items: items.map((it) => ({ ...it, id: uid() })), category }),
 
-    toggleDeliverable: (clientId, deliverableId) =>
-      setData((d) => ({
-        ...d,
-        clients: d.clients.map((c) =>
-          c.id === clientId
-            ? { ...c, deliverables: c.deliverables.map((x) => (x.id === deliverableId ? { ...x, done: !x.done } : x)) }
-            : c
-        )
-      })),
+    toggleDeliverable: (clientId, deliverableId) => run({ type: 'toggleDeliverable', clientId, deliverableId }),
 
-    deleteDeliverable: (clientId, deliverableId) =>
-      setData((d) => ({
-        ...d,
-        clients: d.clients.map((c) =>
-          c.id === clientId ? { ...c, deliverables: c.deliverables.filter((x) => x.id !== deliverableId) } : c
-        )
-      })),
+    deleteDeliverable: (clientId, deliverableId) => run({ type: 'deleteDeliverable', clientId, deliverableId }),
 
     openClient: (id) => openClientId(id),
 
-    applyActions: (list) =>
-      setData((d) => {
-        let clients: Client[] = [...d.clients];
-        let tasks: Task[] = [...d.tasks];
-
-        const find = (name: string | null | undefined): Client | null => {
-          if (!name) return null;
-          const n = String(name).toLowerCase().trim();
-          return (
-            clients.find((c) => c.name.toLowerCase() === n) ||
-            clients.find((c) => c.name.toLowerCase().includes(n) || n.includes(c.name.toLowerCase())) ||
-            null
-          );
-        };
-        const ensure = (name: string | null | undefined, phone?: string | null): Client => {
-          const hit = find(name);
-          if (hit) return hit;
-          const c = newClient(String(name || 'Unnamed'), phone);
-          clients = [...clients, c];
-          return c;
-        };
-        const patch = (id: string, p: Partial<Client>) => {
-          clients = clients.map((c) => (c.id === id ? { ...c, ...p } : c));
-        };
-        const get = (id: string) => clients.find((c) => c.id === id)!;
-
-        (list || []).forEach((a) => {
-          try {
-            if (a.type === 'task' && a.title) {
-              const c = a.clientName ? ensure(a.clientName) : null;
-              tasks = [...tasks, { id: uid(), title: a.title, clientId: c ? c.id : null, date: a.date || today(), done: false }];
-            } else if (a.type === 'client' && a.name) {
-              ensure(a.name, a.phone);
-            } else if (a.type === 'stage' && a.stage) {
-              const c = ensure(a.clientName);
-              const cur = get(c.id);
-              patch(c.id, { stage: a.stage, history: { ...cur.history, [a.stage]: cur.history[a.stage] || today() } });
-            } else if (a.type === 'money') {
-              const c = ensure(a.clientName);
-              const cur = get(c.id);
-              const p: Partial<Client> = {};
-              if (a.quoteValue != null) {
-                p.quoteValue = String(a.quoteValue);
-                if (stageIndex(cur.stage) < 4) {
-                  p.stage = 'quoted';
-                  p.history = { ...cur.history, quoted: cur.history.quoted || today() };
-                }
-              }
-              if (a.advance != null) {
-                p.advance = String(a.advance);
-                if (Number(a.advance) > 0 && stageIndex(cur.stage) < 5) {
-                  p.stage = 'advance';
-                  p.history = { ...cur.history, ...(p.history || {}), advance: cur.history.advance || today() };
-                }
-              }
-              patch(c.id, p);
-            } else if (a.type === 'deliverable' && a.items) {
-              const c = ensure(a.clientName);
-              const cur = get(c.id);
-              patch(c.id, { deliverables: [...cur.deliverables, ...a.items.map((t) => ({ id: uid(), text: t, done: false }))] });
-            } else if (a.type === 'service' && a.service) {
-              const svc = findService(a.service);
-              if (svc) {
-                const c = ensure(a.clientName);
-                const cur = get(c.id);
-                const existing = new Set(cur.deliverables.map((x) => x.text));
-                const fresh = svc.steps.filter((s) => !existing.has(s));
-                patch(c.id, { deliverables: [...cur.deliverables, ...fresh.map((t) => ({ id: uid(), text: t, done: false, category: svc.name }))] });
-              }
-            } else if (a.type === 'done') {
-              const c = find(a.clientName);
-              const m = String(a.match || '').toLowerCase();
-              if (c && m) patch(c.id, { deliverables: c.deliverables.map((x) => (x.text.toLowerCase().includes(m) ? { ...x, done: true } : x)) });
-            } else if (a.type === 'tick') {
-              const m = String(a.match || '').toLowerCase();
-              let hit = false;
-              if (m) {
-                tasks = tasks.map((t) => {
-                  if (!hit && !t.done && t.title.toLowerCase().includes(m)) {
-                    hit = true;
-                    return { ...t, done: true };
-                  }
-                  return t;
-                });
-              }
-            } else if (a.type === 'followup' && a.date) {
-              const c = ensure(a.clientName);
-              patch(c.id, { nextFollowUp: a.date });
-            }
-          } catch (e) {
-            // skip a malformed action, keep the rest
-          }
-        });
-
-        return { clients, tasks };
-      })
+    applyActions: (list) => run({ type: 'applyQuickAddActions', list })
   };
 }

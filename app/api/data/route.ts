@@ -22,20 +22,20 @@ export async function GET() {
     if (error) throw error;
 
     const state: TrackerState = data?.data ?? { clients: [], tasks: [] };
-    // TEMPORARY diagnostic for a live data-loss report — remove once resolved.
-    console.log('[api/data GET]', {
-      foundRow: !!data,
-      clients: state.clients.length,
-      tasks: state.tasks.length,
-      updatedAt: data?.updated_at ?? null
-    });
     return NextResponse.json({ state, updatedAt: data?.updated_at ?? null });
   } catch (err: any) {
-    console.log('[api/data GET] error', err.message);
     return NextResponse.json({ error: err.message || 'Failed to load state.' }, { status: 500 });
   }
 }
 
+// Full-state replace. Deliberately NOT used for normal edits anymore —
+// every add/edit/delete goes through POST /api/data/ops instead, which
+// only ever touches the specific entity an operation names. This stays
+// only for the one place a full replace is actually correct: the "Restore
+// from a backup" flow in DataSheet.tsx, where the user explicitly pastes
+// a full snapshot and asks for it to replace everything. If you're
+// tempted to call this from anywhere else, don't — that's exactly the
+// shape of bug that silently wiped a real client's data in production.
 export async function PUT(req: NextRequest) {
   try {
     const body = (await req.json()) as TrackerState;
@@ -50,11 +50,8 @@ export async function PUT(req: NextRequest) {
 
     if (error) throw error;
 
-    // TEMPORARY diagnostic for a live data-loss report — remove once resolved.
-    console.log('[api/data PUT]', { clients: body.clients.length, tasks: body.tasks.length });
     return NextResponse.json({ ok: true });
   } catch (err: any) {
-    console.log('[api/data PUT] error', err.message);
     return NextResponse.json({ error: err.message || 'Failed to save state.' }, { status: 500 });
   }
 }
