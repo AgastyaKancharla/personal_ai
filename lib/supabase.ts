@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { TrackerState } from './types';
 
 // Server-only client (service role key never reaches the browser). Every
 // caller of this file must run in an API route, not a client component.
@@ -12,6 +13,22 @@ export function supabaseServer() {
 }
 
 export const TRACKER_ROW_ID = 'main';
+
+// Same read-fresh/write-back pair app/api/data/ops/route.ts implements
+// inline — factored out here so other server-only callers (the chat tools
+// executor) can reuse the exact same pattern instead of duplicating raw
+// Supabase calls. app/api/data/ops/route.ts is left as-is (already shipped
+// and tested; no reason to touch a working file for this).
+export async function readTrackerState(supabase: SupabaseClient): Promise<TrackerState> {
+  const { data, error } = await supabase.from('tracker_state').select('data').eq('id', TRACKER_ROW_ID).maybeSingle();
+  if (error) throw error;
+  return data?.data ?? { clients: [], tasks: [] };
+}
+
+export async function writeTrackerState(supabase: SupabaseClient, state: TrackerState): Promise<void> {
+  const { error } = await supabase.from('tracker_state').upsert({ id: TRACKER_ROW_ID, data: state, updated_at: new Date().toISOString() });
+  if (error) throw error;
+}
 
 export interface ParseLogInsert {
   raw_text: string;

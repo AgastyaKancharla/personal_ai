@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Database, Layers, LogOut, Sun, Users } from 'lucide-react';
+import { CalendarDays, Database, Layers, LogOut, MessageCircle, Sun, Users } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
@@ -14,9 +14,10 @@ import { ClientsView } from '@/components/ClientsView';
 import { ClientSheet } from '@/components/ClientSheet';
 import { QuickAdd } from '@/components/QuickAdd';
 import { DataSheet } from '@/components/DataSheet';
+import { ChatView } from '@/components/ChatView';
 
 type Status = 'loading' | 'ok' | 'saving' | 'offline';
-type Tab = 'today' | 'week' | 'month' | 'clients';
+type Tab = 'today' | 'week' | 'month' | 'clients' | 'chat';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
 const OPS_CACHE_KEY = 'personal-ai:pending-ops';
@@ -91,6 +92,32 @@ export default function Home() {
 
   const setData = (updater: (d: TrackerState) => TrackerState) => {
     setDataRaw((d) => updater(d));
+  };
+
+  // A chat tool call mutates tracker_state directly server-side (see
+  // app/api/chat/route.ts) — nothing here queues an operation for it, so
+  // the local view needs a plain re-fetch to reflect it. Only trust the
+  // fresh read if nothing is queued locally right now, same reconciliation
+  // rule scheduleFlush's success path already uses below, so this can't
+  // stomp on an edit made via quick-add/the UI in the meantime.
+  const refetchData = async () => {
+    try {
+      const res = await fetch('/api/data');
+      if (res.status === 401) {
+        router.replace('/login');
+        return;
+      }
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'load failed');
+      if (!pendingOps.current.length) {
+        setDataRaw(out.state);
+        setUpdatedAt(out.updatedAt);
+      }
+    } catch (e) {
+      // best-effort — the chat tool call itself already succeeded
+      // server-side; a failed refresh here just leaves the UI stale until
+      // the next successful sync, nothing is lost.
+    }
   };
 
   const scheduleFlush = (immediate?: { keepalive: boolean }) => {
@@ -218,7 +245,8 @@ export default function Home() {
     ['today', 'Today', Sun],
     ['week', 'Week', CalendarDays],
     ['month', 'Month', Layers],
-    ['clients', 'Clients', Users]
+    ['clients', 'Clients', Users],
+    ['chat', 'Chat', MessageCircle]
   ];
 
   if (!ready) {
@@ -281,10 +309,11 @@ export default function Home() {
           {tab === 'week' && <WeekView data={data} actions={actions} />}
           {tab === 'month' && <MonthView data={data} />}
           {tab === 'clients' && <ClientsView data={data} actions={actions} />}
+          {tab === 'chat' && <ChatView onMutated={refetchData} onOpenClient={setOpenId} actions={actions} />}
         </div>
       </div>
 
-      <QuickAdd clients={data.clients} onApply={actions.applyActions} />
+      {tab !== 'chat' && <QuickAdd clients={data.clients} onApply={actions.applyActions} />}
       {showData && <DataSheet data={data} updatedAt={updatedAt} onRestore={restoreBackup} onClose={() => setShowData(false)} />}
       {openClient && <ClientSheet client={openClient} actions={actions} onClose={() => setOpenId(null)} />}
     </div>
