@@ -110,8 +110,19 @@ const STOP_HEADINGS = [
   'acceptance'
 ];
 
+// The second scope column isn't always literally titled "Every Month" —
+// a one-time engagement with no monthly retainer instead labels it
+// something like "Included Free — Months 1 to 4" (confirmed against a
+// second real generated document). Match that by prefix since the exact
+// month range varies; "Every Month" stays as its own exact check since
+// that's the only other real-world variant seen so far.
+const INCLUDED_FREE_RE = /^included free\b/i;
+function isSecondColumnMarker(lower: string): boolean {
+  return lower === 'every month' || INCLUDED_FREE_RE.test(lower);
+}
+
 function isBoundary(lower: string): boolean {
-  return SCOPE_MARKERS.includes(lower) || STOP_HEADINGS.some((h) => lower.startsWith(h));
+  return lower === 'setup includes' || isSecondColumnMarker(lower) || STOP_HEADINGS.some((h) => lower.startsWith(h));
 }
 
 interface TemplateItem {
@@ -125,11 +136,22 @@ function extractAgastyaOneScope(rawLines: string[]): TemplateItem[] | null {
 
   // A scope-bullet run also ends the moment the *next* line is itself a
   // "Setup Includes" marker (a new service always starts there, never with
-  // "Every Month") — that current line is really the next service's
-  // subheading, not a bullet, and must be left for the outer loop to
-  // consume so it can be captured as that next service's category. "Every
-  // Month" is excluded from this check: it's the second column of the
-  // *same* service's row, so the line right before it is still a real bullet.
+  // "Every Month"/"Included Free") — that current line is really the next
+  // service's subheading, not a bullet, and must be left for the outer loop
+  // to consume so it can be captured as that next service's category.
+  //
+  // When a new top-level section starts, generate_quote.js also emits a
+  // broader section-heading line *before* that subheading (confirmed
+  // against a real multi-section document) — two non-bullet lines back
+  // instead of one. There's no reliable text-only signal to tell that
+  // heading apart from a genuine short bullet at the same position (a
+  // service with no section change has a real bullet there instead), so
+  // this deliberately doesn't try to strip it: a stray section-heading line
+  // occasionally landing in the previous service's group, with that
+  // group's price, is an easy, obvious thing to spot and uncheck on the
+  // mandatory review screen — silently dropping a real bullet instead would
+  // not be. Same "never guess past what the text actually tells you" rule
+  // as the rest of this parser.
   const runContinues = (idx: number) => !isBoundary(lower[idx]) && !(idx + 1 < rawLines.length && lower[idx + 1] === 'setup includes');
 
   const items: TemplateItem[] = [];
@@ -146,10 +168,11 @@ function extractAgastyaOneScope(rawLines: string[]): TemplateItem[] | null {
         items.push({ text: rawLines[i], category: currentCategory });
         i++;
       }
-    } else if (lower[i] === 'every month') {
-      // "Every Month" is the second column of the same row — reuse
-      // whichever service's "Setup Includes" we just saw, not whatever
-      // line happens to precede it (that's the last Setup Includes bullet).
+    } else if (isSecondColumnMarker(lower[i])) {
+      // "Every Month" / "Included Free — Months …" is the second column of
+      // the same row — reuse whichever service's "Setup Includes" we just
+      // saw, not whatever line happens to precede it (that's the last
+      // Setup Includes bullet).
       i++;
       while (i < rawLines.length && runContinues(i)) {
         items.push({ text: rawLines[i], category: currentCategory });
