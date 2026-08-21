@@ -13,10 +13,10 @@ import { today, uid } from './dates';
 // there is no code path left that can overwrite an entity this operation
 // doesn't name.
 export type Operation =
-  | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string; recurrence?: Task['recurrence']; time?: string }
+  | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string; recurrence?: Task['recurrence']; time?: string; tags?: string[] }
   | { type: 'toggleTask'; id: string; nextOccurrence?: { id: string; date: string } }
   | { type: 'deleteTask'; id: string }
-  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time'>> }
+  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time' | 'tags'>> }
   | { type: 'addClient'; id: string; name: string; phone: string }
   | { type: 'updateClient'; id: string; patch: Partial<Client> }
   | { type: 'deleteClient'; id: string }
@@ -157,7 +157,7 @@ export function applyOp(state: TrackerState, op: Operation): TrackerState {
         ...state,
         tasks: [
           ...state.tasks,
-          { id: op.id, title: op.title, clientId: op.clientId, date: op.date, done: false, recurrence: op.recurrence, time: op.time }
+          { id: op.id, title: op.title, clientId: op.clientId, date: op.date, done: false, recurrence: op.recurrence, time: op.time, tags: op.tags }
         ]
       };
 
@@ -181,7 +181,8 @@ export function applyOp(state: TrackerState, op: Operation): TrackerState {
               date: op.nextOccurrence.date,
               done: false,
               recurrence: target.recurrence,
-              time: target.time
+              time: target.time,
+              tags: target.tags
             }
           ]
         };

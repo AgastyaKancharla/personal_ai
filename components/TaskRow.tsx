@@ -20,7 +20,7 @@ export function TaskRow({
   clients?: Client[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
-  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time'>>) => void;
+  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence' | 'time' | 'tags'>>) => void;
   overdue?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -29,6 +29,7 @@ export function TaskRow({
   const [clientId, setClientId] = useState(task.clientId || '');
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>(task.recurrence?.freq || '');
   const [time, setTime] = useState(task.time || '');
+  const [tagsInput, setTagsInput] = useState((task.tags || []).join(', '));
 
   const startEdit = () => {
     setTitle(task.title);
@@ -36,17 +37,23 @@ export function TaskRow({
     setClientId(task.clientId || '');
     setRepeat(task.recurrence?.freq || '');
     setTime(task.time || '');
+    setTagsInput((task.tags || []).join(', '));
     setEditing(true);
   };
 
   const save = () => {
     if (!title.trim() || !onUpdate) return;
+    const tags = tagsInput
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
     onUpdate(task.id, {
       title: title.trim(),
       date,
       clientId: clientId || null,
       recurrence: repeat ? { freq: repeat } : undefined,
-      time: time || undefined
+      time: time || undefined,
+      tags: tags.length ? tags : undefined
     });
     setEditing(false);
   };
@@ -105,6 +112,14 @@ export function TaskRow({
             <option value="monthly">Monthly</option>
           </select>
         </div>
+        <input
+          value={tagsInput}
+          onChange={(e) => setTagsInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+          placeholder="Tags — comma separated"
+          className="w-full rounded-xl px-3 outline-none"
+          style={{ fontSize: 12, height: 34, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+        />
         <div className="flex gap-2 justify-end">
           <button onClick={() => setEditing(false)} className="rounded-lg px-3" style={{ height: 32, fontSize: 12.5, color: C.muted, fontWeight: 600 }}>
             Cancel
@@ -150,6 +165,15 @@ export function TaskRow({
             </span>
           )}
         </div>
+        {task.tags && task.tags.length > 0 && (
+          <div className="flex gap-1 flex-wrap mt-1.5">
+            {task.tags.map((tag) => (
+              <span key={tag} className="rounded-full px-2 py-0.5" style={{ fontSize: 10, color: C.muted, background: C.paper }}>
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       {onUpdate && (
         <button onClick={() => onUpdate(task.id, { important: !task.important })} className="shrink-0 p-1" style={{ color: task.important ? C.orange : C.line }}>

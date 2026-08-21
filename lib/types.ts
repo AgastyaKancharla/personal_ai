@@ -73,6 +73,10 @@ export interface Task {
   // to store or edit it. Undefined means "no particular time" (an anytime
   // task), same optional-field convention as `important`/`recurrence`.
   time?: string;
+  // Free-form, lowercase, user-typed labels (e.g. "personal", "gym") —
+  // mainly for tasks with no client to hang off of. No separate tag
+  // registry; a tag is just whatever string appears across tasks.
+  tags?: string[];
 }
 
 export interface TrackerState {

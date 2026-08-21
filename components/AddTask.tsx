@@ -12,7 +12,7 @@ export function AddTask({
 }: {
   date: string;
   clients: Client[];
-  onAdd: (title: string, clientId: string | null, date: string, recurrence?: { freq: RecurrenceFreq }, time?: string) => void;
+  onAdd: (title: string, clientId: string | null, date: string, recurrence?: { freq: RecurrenceFreq }, time?: string, tags?: string[]) => void;
 }) {
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
@@ -22,14 +22,20 @@ export function AddTask({
   const [taskDate, setTaskDate] = useState(date);
   const [repeat, setRepeat] = useState<'' | RecurrenceFreq>('');
   const [time, setTime] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
 
   const submit = () => {
     if (!title.trim()) return;
-    onAdd(title.trim(), clientId || null, taskDate, repeat ? { freq: repeat } : undefined, time || undefined);
+    const tags = tagsInput
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    onAdd(title.trim(), clientId || null, taskDate, repeat ? { freq: repeat } : undefined, time || undefined, tags.length ? tags : undefined);
     setTitle('');
     setTaskDate(date);
     setRepeat('');
     setTime('');
+    setTagsInput('');
   };
 
   return (
@@ -91,6 +97,14 @@ export function AddTask({
           <option value="monthly">Monthly</option>
         </select>
       </div>
+      <input
+        value={tagsInput}
+        onChange={(e) => setTagsInput(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && submit()}
+        placeholder="Tags — comma separated (e.g. personal, gym)"
+        className="w-full rounded-xl px-3 outline-none"
+        style={{ fontSize: 12, height: 36, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+      />
     </div>
   );
 }

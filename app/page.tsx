@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Database, Layers, ListChecks, LogOut, MessageCircle, Sun, Users } from 'lucide-react';
+import { CalendarDays, Database, Layers, ListChecks, LogOut, MessageCircle, Search, Sun, Users } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
@@ -16,6 +16,7 @@ import { QuickAdd } from '@/components/QuickAdd';
 import { DataSheet } from '@/components/DataSheet';
 import { ChatView } from '@/components/ChatView';
 import { TrackView } from '@/components/TrackView';
+import { SearchSheet } from '@/components/SearchSheet';
 
 type Status = 'loading' | 'ok' | 'saving' | 'offline';
 type Tab = 'today' | 'week' | 'month' | 'clients' | 'track' | 'chat';
@@ -51,6 +52,7 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [showData, setShowData] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   // Every edit is a small operation (see lib/stateOps.ts), never a full
   // state snapshot. pendingOps queues them; the debounce below batches
@@ -295,6 +297,9 @@ export default function Home() {
                   {status === 'offline' ? 'Not synced' : status === 'saving' ? 'Saving' : 'Synced'}
                 </span>
               </button>
+              <button onClick={() => setShowSearch(true)} title="Search">
+                <Search size={13} color={C.muted} />
+              </button>
               <button onClick={logout} title="Log out">
                 <LogOut size={13} color={C.muted} />
               </button>
@@ -335,6 +340,7 @@ export default function Home() {
 
       {tab !== 'chat' && <QuickAdd clients={data.clients} onApply={actions.applyActions} />}
       {showData && <DataSheet data={data} updatedAt={updatedAt} onRestore={restoreBackup} onClose={() => setShowData(false)} />}
+      {showSearch && <SearchSheet data={data} actions={actions} onClose={() => setShowSearch(false)} />}
       {openClient && <ClientSheet client={openClient} actions={actions} onClose={() => setOpenId(null)} />}
     </div>
   );
