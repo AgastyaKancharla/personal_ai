@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Pencil, Trash2 } from 'lucide-react';
+import { Check, Pencil, Star, Trash2 } from 'lucide-react';
 import { C } from '@/lib/theme';
 import { Client, Task } from '@/lib/types';
 
@@ -19,7 +19,7 @@ export function TaskRow({
   clients?: Client[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
-  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>>) => void;
+  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important'>>) => void;
   overdue?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -108,6 +108,11 @@ export function TaskRow({
           )}
         </div>
       </div>
+      {onUpdate && (
+        <button onClick={() => onUpdate(task.id, { important: !task.important })} className="shrink-0 p-1" style={{ color: task.important ? C.orange : C.line }}>
+          <Star size={14} fill={task.important ? C.orange : 'none'} />
+        </button>
+      )}
       {onUpdate && (
         <button onClick={startEdit} className="shrink-0 p-1" style={{ color: C.line }}>
           <Pencil size={13} />

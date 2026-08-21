@@ -41,7 +41,7 @@ export function WeekView({ data, actions }: { data: TrackerState; actions: Actio
       <div className="space-y-2">
         {days.map((d, i) => {
           const key = iso(d);
-          const items = data.tasks.filter((x) => x.date === key);
+          const items = data.tasks.filter((x) => x.date === key).sort((a, b) => Number(b.important) - Number(a.important));
           const isToday = key === t;
           const isOpen = open === key;
           return (

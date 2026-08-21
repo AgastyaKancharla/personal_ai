@@ -8,7 +8,7 @@ export interface Actions {
   addTask: (title: string, clientId: string | null, date: string) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
-  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>>) => void;
+  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important'>>) => void;
   addClient: (name: string, phone: string) => void;
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;

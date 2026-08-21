@@ -38,6 +38,18 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
   });
 
+  it('updateTask can patch the important flag alone, without touching other fields', () => {
+    const before = stateWith({
+      tasks: [
+        { id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false },
+        { id: 't2', title: 'B', clientId: null, date: '2026-08-20', done: false }
+      ]
+    });
+    const after = applyOp(before, { type: 'updateTask', id: 't1', patch: { important: true } });
+    expect(after.tasks.find((t) => t.id === 't1')).toEqual({ id: 't1', title: 'A', clientId: null, date: '2026-08-20', done: false, important: true });
+    expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
+  });
+
   it('deleteClient removes only the named client — this is the exact bug that shipped: a one-tap delete with no other safeguard wiped a real client', () => {
     const a = mkClient('Client A');
     const b = mkClient('Client B');

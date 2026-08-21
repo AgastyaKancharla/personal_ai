@@ -14,8 +14,9 @@ import { AddTask } from './AddTask';
 export function TodayView({ data, actions }: { data: TrackerState; actions: Actions }) {
   const t = today();
   const byId = useMemo(() => Object.fromEntries(data.clients.map((c) => [c.id, c])), [data.clients]);
-  const todays = data.tasks.filter((x) => x.date === t);
-  const overdue = data.tasks.filter((x) => x.date < t && !x.done);
+  const byImportant = (a: { important?: boolean }, b: { important?: boolean }) => Number(b.important) - Number(a.important);
+  const todays = data.tasks.filter((x) => x.date === t).sort(byImportant);
+  const overdue = data.tasks.filter((x) => x.date < t && !x.done).sort(byImportant);
   const followUps = data.clients.filter((c) => c.nextFollowUp && c.nextFollowUp <= t && c.stage !== 'delivered');
   const d = new Date();
   const done = todays.filter((x) => x.done).length;
@@ -41,7 +42,15 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
 
       {overdue.length > 0 && (
         <div className="rounded-2xl p-4" style={{ background: C.orangeSoft, border: `1px solid ${C.orange}33` }}>
-          <Eyebrow tone={C.orange}>Slipped — {overdue.length} pending</Eyebrow>
+          <div className="flex items-center justify-between mb-1">
+            <Eyebrow tone={C.orange}>Slipped — {overdue.length} pending</Eyebrow>
+            <button
+              onClick={() => overdue.forEach((x) => actions.updateTask(x.id, { date: t }))}
+              style={{ fontSize: 11, color: C.orange, fontWeight: 700, textDecoration: 'underline', marginBottom: 8 }}
+            >
+              Move all to today
+            </button>
+          </div>
           {overdue.map((x) => (
             <TaskRow
               key={x.id}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Database, Layers, LogOut, MessageCircle, Sun, Users } from 'lucide-react';
+import { CalendarDays, Database, Layers, ListChecks, LogOut, MessageCircle, Sun, Users } from 'lucide-react';
 import { C, DISPLAY } from '@/lib/theme';
 import { TrackerState } from '@/lib/types';
 import { makeActions } from '@/lib/actions';
@@ -15,9 +15,10 @@ import { ClientSheet } from '@/components/ClientSheet';
 import { QuickAdd } from '@/components/QuickAdd';
 import { DataSheet } from '@/components/DataSheet';
 import { ChatView } from '@/components/ChatView';
+import { TrackView } from '@/components/TrackView';
 
 type Status = 'loading' | 'ok' | 'saving' | 'offline';
-type Tab = 'today' | 'week' | 'month' | 'clients' | 'chat';
+type Tab = 'today' | 'week' | 'month' | 'clients' | 'track' | 'chat';
 
 const EMPTY: TrackerState = { clients: [], tasks: [] };
 const OPS_CACHE_KEY = 'personal-ai:pending-ops';
@@ -263,6 +264,7 @@ export default function Home() {
     ['week', 'Week', CalendarDays],
     ['month', 'Month', Layers],
     ['clients', 'Clients', Users],
+    ['track', 'Track', ListChecks],
     ['chat', 'Chat', MessageCircle]
   ];
 
@@ -326,6 +328,7 @@ export default function Home() {
           {tab === 'week' && <WeekView data={data} actions={actions} />}
           {tab === 'month' && <MonthView data={data} />}
           {tab === 'clients' && <ClientsView data={data} actions={actions} />}
+          {tab === 'track' && <TrackView data={data} actions={actions} />}
           {tab === 'chat' && <ChatView onMutated={refetchData} onOpenClient={setOpenId} actions={actions} />}
         </div>
       </div>

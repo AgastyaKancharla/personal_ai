@@ -16,7 +16,7 @@ export type Operation =
   | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string }
   | { type: 'toggleTask'; id: string }
   | { type: 'deleteTask'; id: string }
-  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>> }
+  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important'>> }
   | { type: 'addClient'; id: string; name: string; phone: string }
   | { type: 'updateClient'; id: string; patch: Partial<Client> }
   | { type: 'deleteClient'; id: string }

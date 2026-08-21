@@ -53,6 +53,10 @@ export interface Task {
   clientId: string | null;
   date: string;
   done: boolean;
+  // A single flag, not a priority scale — covers "this one matters more"
+  // without inventing a sort hierarchy nobody asked for. Undefined reads
+  // the same as false.
+  important?: boolean;
 }
 
 export interface TrackerState {
