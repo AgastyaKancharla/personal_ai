@@ -1,4 +1,4 @@
-import { Client, DeliverableInput, QuickAddAction, StageKey, TrackerState } from './types';
+import { Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
 import { Operation, applyOp } from './stateOps';
 import { uid } from './dates';
 
@@ -8,6 +8,7 @@ export interface Actions {
   addTask: (title: string, clientId: string | null, date: string) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
+  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>>) => void;
   addClient: (name: string, phone: string) => void;
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -37,6 +38,8 @@ export function makeActions(setData: SetState, openClientId: (id: string) => voi
     toggleTask: (id) => run({ type: 'toggleTask', id }),
 
     deleteTask: (id) => run({ type: 'deleteTask', id }),
+
+    updateTask: (id, patch) => run({ type: 'updateTask', id, patch }),
 
     addClient: (name, phone) => run({ type: 'addClient', id: uid(), name, phone }),
 

@@ -16,6 +16,7 @@ export type Operation =
   | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string }
   | { type: 'toggleTask'; id: string }
   | { type: 'deleteTask'; id: string }
+  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>> }
   | { type: 'addClient'; id: string; name: string; phone: string }
   | { type: 'updateClient'; id: string; patch: Partial<Client> }
   | { type: 'deleteClient'; id: string }
@@ -159,6 +160,9 @@ export function applyOp(state: TrackerState, op: Operation): TrackerState {
 
     case 'deleteTask':
       return { ...state, tasks: state.tasks.filter((t) => t.id !== op.id) };
+
+    case 'updateTask':
+      return { ...state, tasks: state.tasks.map((t) => (t.id === op.id ? { ...t, ...op.patch } : t)) };
 
     case 'addClient':
       return { ...state, clients: [...state.clients, newClient(op.id, op.name, op.phone)] };

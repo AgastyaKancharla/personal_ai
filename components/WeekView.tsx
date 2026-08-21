@@ -73,7 +73,15 @@ export function WeekView({ data, actions }: { data: TrackerState; actions: Actio
                 <div className="px-4 pb-3" style={{ borderTop: `1px solid ${C.line}` }}>
                   <div className="pt-1">
                     {items.map((x) => (
-                      <TaskRow key={x.id} task={x} client={byId[x.clientId || '']} onToggle={actions.toggleTask} onDelete={actions.deleteTask} />
+                      <TaskRow
+                        key={x.id}
+                        task={x}
+                        client={byId[x.clientId || '']}
+                        clients={data.clients}
+                        onToggle={actions.toggleTask}
+                        onDelete={actions.deleteTask}
+                        onUpdate={actions.updateTask}
+                      />
                     ))}
                   </div>
                   <AddTask date={key} clients={data.clients} onAdd={actions.addTask} />

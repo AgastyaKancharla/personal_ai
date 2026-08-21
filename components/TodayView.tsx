@@ -43,7 +43,16 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
         <div className="rounded-2xl p-4" style={{ background: C.orangeSoft, border: `1px solid ${C.orange}33` }}>
           <Eyebrow tone={C.orange}>Slipped — {overdue.length} pending</Eyebrow>
           {overdue.map((x) => (
-            <TaskRow key={x.id} task={x} client={byId[x.clientId || '']} overdue onToggle={actions.toggleTask} onDelete={actions.deleteTask} />
+            <TaskRow
+              key={x.id}
+              task={x}
+              client={byId[x.clientId || '']}
+              clients={data.clients}
+              overdue
+              onToggle={actions.toggleTask}
+              onDelete={actions.deleteTask}
+              onUpdate={actions.updateTask}
+            />
           ))}
         </div>
       )}
@@ -53,7 +62,17 @@ export function TodayView({ data, actions }: { data: TrackerState; actions: Acti
         {todays.length === 0 ? (
           <Empty>Nothing planned. Add the first thing you&apos;ll do.</Empty>
         ) : (
-          todays.map((x) => <TaskRow key={x.id} task={x} client={byId[x.clientId || '']} onToggle={actions.toggleTask} onDelete={actions.deleteTask} />)
+          todays.map((x) => (
+            <TaskRow
+              key={x.id}
+              task={x}
+              client={byId[x.clientId || '']}
+              clients={data.clients}
+              onToggle={actions.toggleTask}
+              onDelete={actions.deleteTask}
+              onUpdate={actions.updateTask}
+            />
+          ))
         )}
         <AddTask date={t} clients={data.clients} onAdd={actions.addTask} />
       </Card>

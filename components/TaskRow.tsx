@@ -1,22 +1,91 @@
 'use client';
 
-import { Check, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Check, Pencil, Trash2 } from 'lucide-react';
 import { C } from '@/lib/theme';
 import { Client, Task } from '@/lib/types';
 
 export function TaskRow({
   task,
   client,
+  clients,
   onToggle,
   onDelete,
+  onUpdate,
   overdue
 }: {
   task: Task;
   client?: Client;
+  clients?: Client[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
+  onUpdate?: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId'>>) => void;
   overdue?: boolean;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [date, setDate] = useState(task.date);
+  const [clientId, setClientId] = useState(task.clientId || '');
+
+  const startEdit = () => {
+    setTitle(task.title);
+    setDate(task.date);
+    setClientId(task.clientId || '');
+    setEditing(true);
+  };
+
+  const save = () => {
+    if (!title.trim() || !onUpdate) return;
+    onUpdate(task.id, { title: title.trim(), date, clientId: clientId || null });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="py-2.5 space-y-2" style={{ borderBottom: `1px solid ${C.line}` }}>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+          className="w-full rounded-xl px-3 outline-none"
+          style={{ fontSize: 14, height: 38, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+        />
+        <div className="flex gap-2">
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="flex-1 rounded-xl px-2 outline-none"
+            style={{ fontSize: 12, height: 36, minWidth: 0, background: C.white, border: `1px solid ${C.line}`, color: C.ink }}
+          />
+          {clients && clients.length > 0 && (
+            <select
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              className="flex-1 rounded-xl px-2 outline-none"
+              style={{ fontSize: 12, height: 36, minWidth: 0, background: C.white, border: `1px solid ${C.line}`, color: C.muted }}
+            >
+              <option value="">No client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => setEditing(false)} className="rounded-lg px-3" style={{ height: 32, fontSize: 12.5, color: C.muted, fontWeight: 600 }}>
+            Cancel
+          </button>
+          <button onClick={save} className="rounded-lg px-3" style={{ height: 32, fontSize: 12.5, color: C.white, background: C.teal, fontWeight: 600 }}>
+            Save
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-start gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.line}` }}>
       <button
@@ -39,6 +108,11 @@ export function TaskRow({
           )}
         </div>
       </div>
+      {onUpdate && (
+        <button onClick={startEdit} className="shrink-0 p-1" style={{ color: C.line }}>
+          <Pencil size={13} />
+        </button>
+      )}
       <button onClick={() => onDelete(task.id)} className="shrink-0 p-1" style={{ color: C.line }}>
         <Trash2 size={14} />
       </button>
