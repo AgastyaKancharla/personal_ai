@@ -50,6 +50,38 @@ describe('applyOp — the only place a TrackerState is ever mutated', () => {
     expect(after.tasks.find((t) => t.id === 't2')).toEqual(before.tasks[1]);
   });
 
+  it('toggleTask on a recurring task spawns the next occurrence when completed', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Water plants', clientId: null, date: '2026-08-19', done: false, recurrence: { freq: 'daily' } }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(2);
+    expect(after.tasks.find((t) => t.id === 't1')!.done).toBe(true);
+    expect(after.tasks.find((t) => t.id === 't2')).toEqual({
+      id: 't2',
+      title: 'Water plants',
+      clientId: null,
+      date: '2026-08-20',
+      done: false,
+      recurrence: { freq: 'daily' }
+    });
+  });
+
+  it('toggleTask does not spawn anything for a non-recurring task', () => {
+    const before = stateWith({ tasks: [{ id: 't1', title: 'One-off', clientId: null, date: '2026-08-19', done: false }] });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1' });
+    expect(after.tasks).toHaveLength(1);
+  });
+
+  it('toggleTask un-completing a recurring task does not spawn a duplicate', () => {
+    const before = stateWith({
+      tasks: [{ id: 't1', title: 'Water plants', clientId: null, date: '2026-08-19', done: true, recurrence: { freq: 'daily' } }]
+    });
+    const after = applyOp(before, { type: 'toggleTask', id: 't1', nextOccurrence: { id: 't2', date: '2026-08-20' } });
+    expect(after.tasks).toHaveLength(1);
+    expect(after.tasks[0].done).toBe(false);
+  });
+
   it('deleteClient removes only the named client — this is the exact bug that shipped: a one-tap delete with no other safeguard wiped a real client', () => {
     const a = mkClient('Client A');
     const b = mkClient('Client B');

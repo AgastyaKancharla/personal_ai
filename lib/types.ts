@@ -47,6 +47,12 @@ export interface Client {
   history: Partial<Record<StageKey, string>>;
 }
 
+export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly';
+
+export interface Recurrence {
+  freq: RecurrenceFreq;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -57,6 +63,11 @@ export interface Task {
   // without inventing a sort hierarchy nobody asked for. Undefined reads
   // the same as false.
   important?: boolean;
+  // When set, completing this task spawns its next occurrence (see
+  // applyOp's toggleTask case) rather than the series being tracked
+  // separately — there is no "recurring task template" entity, just a
+  // chain of ordinary tasks that happen to carry the same rule forward.
+  recurrence?: Recurrence;
 }
 
 export interface TrackerState {

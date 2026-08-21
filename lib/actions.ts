@@ -1,14 +1,14 @@
 import { Client, DeliverableInput, QuickAddAction, StageKey, Task, TrackerState } from './types';
 import { Operation, applyOp } from './stateOps';
-import { uid } from './dates';
+import { nextRecurrenceDate, uid } from './dates';
 
 export type SetState = (updater: (d: TrackerState) => TrackerState) => void;
 
 export interface Actions {
-  addTask: (title: string, clientId: string | null, date: string) => void;
+  addTask: (title: string, clientId: string | null, date: string, recurrence?: Task['recurrence']) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
-  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important'>>) => void;
+  updateTask: (id: string, patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence'>>) => void;
   addClient: (name: string, phone: string) => void;
   updateClient: (id: string, patch: Partial<Client>) => void;
   deleteClient: (id: string) => void;
@@ -26,16 +26,29 @@ export interface Actions {
  * responsible for actually getting it to the server — see app/page.tsx's
  * ops queue. Nothing here ever ships a full TrackerState anywhere; only
  * these small, specific instructions do. */
-export function makeActions(setData: SetState, openClientId: (id: string) => void, enqueue: (op: Operation) => void): Actions {
+export function makeActions(data: TrackerState, setData: SetState, openClientId: (id: string) => void, enqueue: (op: Operation) => void): Actions {
   const run = (op: Operation) => {
     setData((d) => applyOp(d, op));
     enqueue(op);
   };
 
   return {
-    addTask: (title, clientId, date) => run({ type: 'addTask', id: uid(), title, clientId, date }),
+    addTask: (title, clientId, date, recurrence) => run({ type: 'addTask', id: uid(), title, clientId, date, recurrence }),
 
-    toggleTask: (id) => run({ type: 'toggleTask', id }),
+    // Reads the pre-toggle task from the current render's `data` (not from
+    // inside setData's updater — that can run more than once, e.g. under
+    // React StrictMode, and minting a fresh next-occurrence id in there
+    // would risk spawning two) so the next-occurrence id/date, if any, is
+    // decided exactly once and carried in the single op sent both to the
+    // optimistic local apply and to the server.
+    toggleTask: (id) => {
+      const t = data.tasks.find((x) => x.id === id);
+      const op: Operation =
+        t && !t.done && t.recurrence
+          ? { type: 'toggleTask', id, nextOccurrence: { id: uid(), date: nextRecurrenceDate(t.date, t.recurrence.freq) } }
+          : { type: 'toggleTask', id };
+      run(op);
+    },
 
     deleteTask: (id) => run({ type: 'deleteTask', id }),
 

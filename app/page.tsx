@@ -223,7 +223,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  const actions = makeActions(setData, setOpenId, enqueue);
+  const actions = makeActions(data, setData, setOpenId, enqueue);
 
   const logout = async () => {
     await fetch('/api/logout', { method: 'POST' });

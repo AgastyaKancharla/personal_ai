@@ -1,3 +1,5 @@
+import { RecurrenceFreq } from './types';
+
 export const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -49,4 +51,16 @@ export const monthRange = (offsetMonths = 0, base: Date = new Date()): DateRange
   const first = new Date(base.getFullYear(), base.getMonth() + offsetMonths, 1);
   const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
   return { startIso: iso(first), endIso: iso(last) };
+};
+
+// Advances a recurring task's date by one period. Monthly clamps into the
+// target month (31 Jan -> 28/29 Feb, not a Date-rollover into March) so a
+// month-end task doesn't drift to a different day of the month over time.
+export const nextRecurrenceDate = (dateIso: string, freq: RecurrenceFreq): string => {
+  const d = parseIso(dateIso);
+  if (freq === 'daily') return iso(addDays(d, 1));
+  if (freq === 'weekly') return iso(addDays(d, 7));
+  const targetMonth = d.getMonth() + 1;
+  const lastDayOfTargetMonth = new Date(d.getFullYear(), targetMonth + 1, 0).getDate();
+  return iso(new Date(d.getFullYear(), targetMonth, Math.min(d.getDate(), lastDayOfTargetMonth)));
 };

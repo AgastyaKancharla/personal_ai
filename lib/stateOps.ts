@@ -13,10 +13,10 @@ import { today, uid } from './dates';
 // there is no code path left that can overwrite an entity this operation
 // doesn't name.
 export type Operation =
-  | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string }
-  | { type: 'toggleTask'; id: string }
+  | { type: 'addTask'; id: string; title: string; clientId: string | null; date: string; recurrence?: Task['recurrence'] }
+  | { type: 'toggleTask'; id: string; nextOccurrence?: { id: string; date: string } }
   | { type: 'deleteTask'; id: string }
-  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important'>> }
+  | { type: 'updateTask'; id: string; patch: Partial<Pick<Task, 'title' | 'date' | 'clientId' | 'important' | 'recurrence'>> }
   | { type: 'addClient'; id: string; name: string; phone: string }
   | { type: 'updateClient'; id: string; patch: Partial<Client> }
   | { type: 'deleteClient'; id: string }
@@ -153,10 +153,37 @@ function applyQuickAddList(state: TrackerState, list: QuickAddAction[]): Tracker
 export function applyOp(state: TrackerState, op: Operation): TrackerState {
   switch (op.type) {
     case 'addTask':
-      return { ...state, tasks: [...state.tasks, { id: op.id, title: op.title, clientId: op.clientId, date: op.date, done: false }] };
+      return {
+        ...state,
+        tasks: [...state.tasks, { id: op.id, title: op.title, clientId: op.clientId, date: op.date, done: false, recurrence: op.recurrence }]
+      };
 
-    case 'toggleTask':
-      return { ...state, tasks: state.tasks.map((t) => (t.id === op.id ? { ...t, done: !t.done } : t)) };
+    case 'toggleTask': {
+      const target = state.tasks.find((t) => t.id === op.id);
+      const toggled = state.tasks.map((t) => (t.id === op.id ? { ...t, done: !t.done } : t));
+      // Only spawns the next occurrence on the false->true transition (not
+      // on un-completing one), and only when the caller supplied the next
+      // id/date to use — same pre-generated-id convention as every other
+      // operation here, so the client's optimistic apply and the server's
+      // authoritative apply create the identical task.
+      if (target && !target.done && target.recurrence && op.nextOccurrence) {
+        return {
+          ...state,
+          tasks: [
+            ...toggled,
+            {
+              id: op.nextOccurrence.id,
+              title: target.title,
+              clientId: target.clientId,
+              date: op.nextOccurrence.date,
+              done: false,
+              recurrence: target.recurrence
+            }
+          ]
+        };
+      }
+      return { ...state, tasks: toggled };
+    }
 
     case 'deleteTask':
       return { ...state, tasks: state.tasks.filter((t) => t.id !== op.id) };
