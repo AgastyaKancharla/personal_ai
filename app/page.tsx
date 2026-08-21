@@ -184,11 +184,28 @@ export default function Home() {
     const flushIfHidden = () => {
       if (document.visibilityState === 'hidden') flushNow();
     };
+    // The mirror problem: a phone that suspends this tab in the background
+    // (routine on Android under battery pressure) freezes React's last
+    // rendered state — nothing here re-runs on its own when it's brought
+    // back. Without this, the screen keeps showing that stale snapshot
+    // until some unrelated write happens to overwrite it with a fresh
+    // server read (scheduleFlush's own success path does that, which is
+    // why adding a task looked like it "revealed" older ones — that save's
+    // response was the first fresh read since suspension, not new data).
+    // Explicitly re-sync on every return to foreground instead of waiting
+    // for that to happen by accident.
+    const refetchIfVisible = () => {
+      if (document.visibilityState === 'visible') refetchData();
+    };
     window.addEventListener('pagehide', flushNow);
     document.addEventListener('visibilitychange', flushIfHidden);
+    document.addEventListener('visibilitychange', refetchIfVisible);
+    window.addEventListener('pageshow', refetchIfVisible);
     return () => {
       window.removeEventListener('pagehide', flushNow);
       document.removeEventListener('visibilitychange', flushIfHidden);
+      document.removeEventListener('visibilitychange', refetchIfVisible);
+      window.removeEventListener('pageshow', refetchIfVisible);
     };
   }, [ready]);
 
